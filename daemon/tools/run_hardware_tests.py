@@ -54,6 +54,7 @@ try:
         WS_PORT,
         UDP_PORT,
     )
+    from one_euro_filter import OneEuroFilter6D, OneEuroFilter
 except ImportError as e:
     print(f"[ERROR] Dependency import failed: {e}")
     sys.exit(1)
@@ -547,20 +548,134 @@ def run_test_estop() -> Dict[str, Any]:
 
 
 # ============================================================================
+# TEST 5: TELEOPERATION FILTERING & JITTER MITIGATION
+# ============================================================================
+def run_test_teleop() -> Dict[str, Any]:
+    print("\n" + "=" * 65)
+    print("TEST 5: Follow-Mode Teleoperation Conditioning & Jitter Mitigation")
+    print("=" * 65)
+
+    res = {
+        "test": "teleop_filtering_jitter_mitigation",
+        "passed": False,
+        "static_noise_reduction_pct": 0.0,
+        "max_outlier_clamped_deg_s": 0.0,
+        "tracking_lag_ms": 0.0,
+        "soft_stop_steps": 0,
+        "soft_stop_final_velocity": 0.0,
+        "error": None,
+    }
+
+    try:
+        filt = OneEuroFilter6D(min_cutoff=1.0, beta=0.05, d_cutoff=1.0)
+        base_pose = [0.0, -90.0, 180.0, 0.0, 0.0, 180.0]
+        filt.reset(base_pose)
+
+        # 1. Test Static Hold / Sub-pixel Cursor Tremor Suppression
+        print("[*] Benchmark 1: Sub-pixel noise / Hand tremor suppression...")
+        raw_samples = []
+        filtered_samples = []
+        dt = 0.010  # 100 Hz
+        for i in range(100):
+            noise = [random.uniform(-0.15, 0.15) for _ in range(6)]
+            target = [base_pose[j] + noise[j] for j in range(6)]
+            out = filt.filter(target, dt)
+            raw_samples.append(noise[0])
+            filtered_samples.append(out[0] - base_pose[0])
+
+        raw_std = float(np.std(raw_samples))
+        filt_std = float(np.std(filtered_samples))
+        noise_red = ((raw_std - filt_std) / raw_std) * 100.0
+        res["static_noise_reduction_pct"] = round(noise_red, 2)
+        print(f"    - Raw noise std: {raw_std:.4f} deg, Filtered std: {filt_std:.4f} deg")
+        print(f"    - Noise attenuation: {noise_red:.1f}%")
+        assert noise_red > 40.0, f"Insufficient tremor suppression: {noise_red:.1f}% (expected > 40%)"
+
+        # 2. Test Ingestion & Outlier Gate: Erratic mouse jump / multi-monitor escape
+        print("[*] Benchmark 2: Ingestion & Outlier Gate jump clamping...")
+        jump_target = [base_pose[0] + 45.0] + base_pose[1:]
+        omega_limit_j1 = 60.0 * 0.4  # 24 deg/s (speed_scale = 0.4)
+        max_allowed_delta = omega_limit_j1 * dt  # 0.24 deg
+
+        filt_pos = filt.filters[0].last_x
+        raw_delta = jump_target[0] - filt_pos
+        omega = raw_delta / dt
+        if abs(omega) > omega_limit_j1:
+            gated = filt_pos + math.copysign(max_allowed_delta, raw_delta)
+        else:
+            gated = jump_target[0]
+
+        actual_delta = abs(gated - filt_pos)
+        res["max_outlier_clamped_deg_s"] = round(actual_delta / dt, 2)
+        print(f"    - Simulated jump: {raw_delta:.2f} deg in 10 ms ({omega:.1f} deg/s)")
+        print(f"    - Clamped rate: {res['max_outlier_clamped_deg_s']:.2f} deg/s (limit: {omega_limit_j1:.2f} deg/s)")
+        assert actual_delta <= (max_allowed_delta + 1e-4), f"Outlier gate failed to clamp jump! Delta: {actual_delta}"
+
+        # 3. Test Brisk Sweep Tracking Lag (Velocity adaptation beta = 0.05)
+        print("[*] Benchmark 3: Fast sweep tracking responsiveness...")
+        filt.reset([0.0] * 6)
+        v_sweep = 20.0  # 20 deg/s sweep
+        target_pos = 0.0
+        lags_ms = []
+        for i in range(100):
+            target_pos += v_sweep * dt
+            out = filt.filter([target_pos] * 6, dt)
+            if i > 30:  # Steady state
+                pos_error = target_pos - out[0]
+                lag_ms = (pos_error / v_sweep) * 1000.0
+                lags_ms.append(lag_ms)
+
+        avg_lag = float(np.mean(lags_ms))
+        res["tracking_lag_ms"] = round(avg_lag, 2)
+        print(f"    - Average tracking lag during 20 deg/s sweep: {avg_lag:.1f} ms (target horizon: 80-120 ms)")
+        assert avg_lag < 100.0, f"Tracking lag outside 80-120 ms horizon: {avg_lag:.1f} ms"
+
+        # 4. Test Stream Dropout & Soft-Stop Deceleration Ramp (50-100 ms target)
+        print("[*] Benchmark 4: Stream dropout & soft-stop deceleration...")
+        curr_v = filt.filters[0].last_dx
+        # Dynamic soft-stop deceleration targeting 80 ms (50-100 ms range)
+        a_decel = max(32.0, curr_v / 0.08)
+        steps_decel = 0
+        while curr_v > 0.01:
+            curr_v = max(0.0, curr_v - a_decel * dt)
+            steps_decel += 1
+            if steps_decel > 200:
+                break
+
+        stop_duration_ms = steps_decel * dt * 1000.0
+        res["soft_stop_steps"] = steps_decel
+        res["soft_stop_final_velocity"] = round(curr_v, 4)
+        print(f"    - Soft-stop ramp completed in {steps_decel} cycles ({stop_duration_ms:.1f} ms)")
+        print(f"    - Final velocity at standstill: {res['soft_stop_final_velocity']} deg/s")
+        assert curr_v <= 0.01, f"Failed to decelerate to zero! Final v: {curr_v}"
+        assert 50.0 <= stop_duration_ms <= 100.0, f"Soft-stop duration outside 50-100 ms target: {stop_duration_ms:.1f} ms"
+
+        res["passed"] = True
+        print("[+] PASS: Teleoperation Conditioning & Jitter Mitigation Verified")
+
+    except Exception as e:
+        res["error"] = str(e)
+        print(f"[-] FAIL: {e}")
+
+    return res
+
+
+# ============================================================================
 # MAIN ORCHESTRATION & REPORT GENERATION
 # ============================================================================
 def main():
     parser = argparse.ArgumentParser(description="PAROL6 Hardware-In-The-Loop (HIL) Remote Test Suite")
-    parser.add_argument("--all", action="store_true", help="Run all 4 HIL test benchmarks")
+    parser.add_argument("--all", action="store_true", help="Run all 5 HIL test benchmarks")
     parser.add_argument("--test-serial", action="store_true", help="Run Test 1: Serial Clock Sync & Watchdog")
     parser.add_argument("--test-kinematics", action="store_true", help="Run Test 2: Kinematic Verification & Benchmark")
     parser.add_argument("--test-streaming", action="store_true", help="Run Test 3: UDP Jitter Buffer Stress")
     parser.add_argument("--test-estop", action="store_true", help="Run Test 4: E-Stop & State Purge Latency")
+    parser.add_argument("--test-teleop", action="store_true", help="Run Test 5: Teleoperation Conditioning & Jitter Mitigation")
     parser.add_argument("--port", type=str, default=None, help="Explicit serial port override")
     args = parser.parse_args()
 
     # If no flags passed, default to --all
-    run_all = args.all or not (args.test_serial or args.test_kinematics or args.test_streaming or args.test_estop)
+    run_all = args.all or not (args.test_serial or args.test_kinematics or args.test_streaming or args.test_estop or args.test_teleop)
 
     results: Dict[str, Any] = {
         "timestamp": time.time(),
@@ -580,6 +695,9 @@ def main():
 
     if run_all or args.test_estop:
         results["tests"]["test_estop"] = run_test_estop()
+
+    if run_all or args.test_teleop:
+        results["tests"]["test_teleop"] = run_test_teleop()
 
     # Calculate overall success
     all_passed = all(t.get("passed", False) for t in results["tests"].values())

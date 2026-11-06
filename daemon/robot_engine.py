@@ -43,6 +43,7 @@ from kinematics import (
 )
 from mcu_sync import McuClockSync
 from trajectory_planner import TrajectoryPlanner, StepChunkData, MCU_FREQ_HZ
+from one_euro_filter import OneEuroFilter6D
 
 # ============================================================================
 # LOGGING CONFIGURATION
@@ -335,6 +336,12 @@ class RobotEngine:
         self.client_udp_endpoint: Optional[Tuple[str, int]] = None
         self.jitter_buffer = JitterBuffer(capacity=64, target_horizon_ms=60.0)
         self.last_client_timestamp_ns: int = 0
+
+        # Teleoperation Conditioning: Ingestion Outlier Gate & Adaptive 1-Euro Filter
+        self.teleop_filter = OneEuroFilter6D(min_cutoff=1.0, beta=0.05, d_cutoff=1.0)
+        self.joint_stream_last_interval: List[int] = [0] * 6
+        self.joint_stream_last_dir: List[int] = [0] * 6
+        self.last_stream_rx_time: float = 0.0
 
         # Start serial listener worker thread
         self.serial_thread = threading.Thread(target=self._serial_worker_thread, daemon=True)
@@ -713,6 +720,9 @@ class RobotEngine:
             q.clear()
         self.free_slots = [16] * 6
         self.joint_stream_end_clock = [0] * 6
+        self.joint_stream_last_interval = [0] * 6
+        self.joint_stream_last_dir = [0] * 6
+        self.teleop_filter.reset(self.joints_deg)
         self.write_raw(b'E')
 
     def reset_system(self):
@@ -722,6 +732,9 @@ class RobotEngine:
             q.clear()
         self.free_slots = [16] * 6
         self.joint_stream_end_clock = [0] * 6
+        self.joint_stream_last_interval = [0] * 6
+        self.joint_stream_last_dir = [0] * 6
+        self.teleop_filter.reset(self.joints_deg)
         self.write_raw(b'R')
         self.state = "IDLE"
 
@@ -733,6 +746,9 @@ class RobotEngine:
             q.clear()
         self.free_slots = [16] * 6
         self.joint_stream_end_clock = [0] * 6
+        self.joint_stream_last_interval = [0] * 6
+        self.joint_stream_last_dir = [0] * 6
+        self.teleop_filter.reset(self.joints_deg)
         payload = struct.pack("<B B B", ord('H'), mask & 0xFF, ord('\n'))
         self.write_raw(payload)
 
@@ -794,8 +810,10 @@ class RobotEngine:
         """
         Real-Time Joint Follower:
         Receives joint targets directly from the Windows Control Suite or Touchscreen,
-        validates soft limits, translates angular deltas into quadratic step chunks,
-        and pushes them directly to the ATmega2560 hardware queues.
+        validates soft limits, filters jitter/tremors via Adaptive 1-Euro filter,
+        enforces physical rate limits via Ingestion Outlier Gate, translates angular
+        deltas into C1-continuous quadratic step chunks, and pushes them directly
+        to the ATmega2560 hardware queues.
         Buffer is maintained 80-120 ms ahead into the MCU hardware clock domain.
         """
         if self.state == "ESTOP":
@@ -809,40 +827,55 @@ class RobotEngine:
             return False
 
         self.stream_packet_count += 1
-        self.stream_last_rx = time.monotonic()
+        now_mono = time.monotonic()
+        self.stream_last_rx = now_mono
+        self.last_stream_rx_time = now_mono
 
         # Clamp target joint angles within safe soft boundaries
-        clamped_targets = self.kinematics.clamp_joints(target_joints_deg)
+        clamped_incoming = self.kinematics.clamp_joints(target_joints_deg)
+        dt_clamped = max(0.005, min(0.2, float(dt)))
+
+        # Ensure teleop filter is initialized to current joints if reset/clean
+        if self.teleop_filter.filters[0].last_x is None:
+            self.teleop_filter.reset(self.joints_deg)
+
+        # 1. Ingestion & Outlier Gate: enforce physical velocity sanity check on joint deltas
+        gated_targets = [0.0] * 6
+        for j in range(6):
+            filt_pos = self.teleop_filter.filters[j].last_x
+            if filt_pos is None:
+                filt_pos = self.joints_deg[j]
+
+            raw_delta_deg = clamped_incoming[j] - filt_pos
+            omega_deg_s = raw_delta_deg / dt_clamped
+            omega_limit_deg_s = self.planner.joint_speeds[j] * self.speed_scale
+
+            if abs(omega_deg_s) > omega_limit_deg_s:
+                # Clamp to safe physical rate
+                gated_targets[j] = filt_pos + math.copysign(omega_limit_deg_s * dt_clamped, raw_delta_deg)
+            else:
+                gated_targets[j] = clamped_incoming[j]
+
+        # 2. Adaptive 1-Euro Filter
+        filtered_targets = self.teleop_filter.filter(gated_targets, dt_clamped)
 
         # Base reference: use target_joints_deg from previous cycle if recent, else actual hardware joints
-        now_mono = time.monotonic()
         if (self.state == "MOVING") and (now_mono - self._last_stream_time < 0.25):
             ref_joints = list(self.target_joints_deg)
         else:
             ref_joints = list(self.joints_deg)
         self._last_stream_time = now_mono
 
-        dt_clamped = max(0.01, min(1.0, float(dt)))
         mcu_dt_ticks = int(round(dt_clamped * MCU_FREQ_HZ))
         now_mcu = self.get_estimated_mcu_clock()
-
         new_chunks_added = False
 
         async with self.streaming_lock:
             for j in range(6):
-                raw_delta_deg = clamped_targets[j] - ref_joints[j]
-
-                # Ingestion & Outlier Gate: enforce joint speed limit per axis
-                max_joint_speed = self.planner.joint_speeds[j] * self.speed_scale
-                max_delta_deg = max_joint_speed * dt_clamped
-                if abs(raw_delta_deg) > max_delta_deg:
-                    delta_deg = math.copysign(max_delta_deg, raw_delta_deg)
-                else:
-                    delta_deg = raw_delta_deg
-
-                clamped_targets[j] = round(ref_joints[j] + delta_deg, 3)
+                delta_deg = filtered_targets[j] - ref_joints[j]
                 steps = int(round(delta_deg * STEPS_PER_DEG[j]))
                 if steps == 0:
+                    self.joint_stream_last_interval[j] = 0
                     continue
 
                 direction = 1 if steps > 0 else 0
@@ -854,41 +887,84 @@ class RobotEngine:
                 if signed_lead > 0x80000000:
                     signed_lead -= 0x100000000
 
+                starved = False
                 if end_clock == 0 or signed_lead <= 0:
                     # Buffer starved or reset: initialize lead buffer (100 ms in future)
                     start_clock = (now_mcu + LEAD_BUFFER_TICKS) & 0xFFFFFFFF
+                    starved = True
                 elif signed_lead > (LEAD_BUFFER_TICKS * 3):
                     # Excess latency buildup (>300 ms): resynchronize
                     start_clock = (now_mcu + LEAD_BUFFER_TICKS) & 0xFFFFFFFF
+                    starved = True
                 else:
-                    # Seamlessly chain to end of previous chunk!
+                    # Seamlessly chain to end of previous chunk
                     start_clock = end_clock
 
-                # Step distribution over duration dt
-                interval_ticks = int(mcu_dt_ticks / abs_steps)
-                interval_ticks = max(160, min(65535, interval_ticks))
+                # Target average step interval across dt
+                bar_i = max(160, min(65535, int(mcu_dt_ticks / abs_steps)))
+
+                # C1 Velocity Continuity: determine entrance interval i_start
+                prev_interval = self.joint_stream_last_interval[j]
+                prev_dir = self.joint_stream_last_dir[j]
+
+                # Standstill crawl interval: 1200 ticks (~13.3 kHz)
+                STANDSTILL_CRAWL_TICKS = 1200
+
+                if starved or prev_interval == 0 or prev_dir != direction:
+                    # Starting from standstill or direction reversal: start conservative crawl
+                    i_start = max(bar_i, STANDSTILL_CRAWL_TICKS)
+                else:
+                    # Axis already moving in same direction: enforce C1 continuity i_start = i_exit,k-1
+                    i_start = prev_interval
 
                 steps_remaining = abs_steps
                 curr_clock = start_clock
+                i_exit = i_start
 
                 while steps_remaining > 0:
                     count = min(24, steps_remaining)
+
+                    if count <= 1:
+                        chunk_iv = int(max(160, min(65535, i_start)))
+                        add = 0
+                        i_exit = chunk_iv
+                    else:
+                        i_start_clamped = max(160, min(65535, i_start))
+                        # Target i_end to achieve average chunk interval bar_i: i_end = 2*bar_i - i_start
+                        i_end = 2 * bar_i - i_start_clamped
+                        i_end_clamped = max(160, min(65535, i_end))
+
+                        raw_add = int(round((i_end_clamped - i_start_clamped) / (count - 1)))
+                        add = max(-128, min(127, raw_add))
+                        chunk_iv = i_start_clamped
+                        i_exit = max(160, min(65535, chunk_iv + (count - 1) * add))
+
                     chunk = StepChunkData(
                         joint=j,
                         first_step_clock=curr_clock,
                         step_count=count,
-                        interval=interval_ticks,
-                        add=0,
+                        interval=chunk_iv,
+                        add=add,
                         dir=direction,
                     )
                     self.pending_chunks[j].append(chunk)
                     new_chunks_added = True
-                    curr_clock = (curr_clock + count * interval_ticks) & 0xFFFFFFFF
+
+                    # Accurate duration of quadratic chunk
+                    chunk_duration_ticks = count * chunk_iv + (count * (count - 1) // 2) * add
+                    curr_clock = (curr_clock + max(chunk_duration_ticks, count * 160)) & 0xFFFFFFFF
                     steps_remaining -= count
+                    # Chain entrance interval for subsequent sub-chunks within this cycle
+                    i_start = i_exit
 
                 self.joint_stream_end_clock[j] = curr_clock
+                self.joint_stream_last_interval[j] = i_exit
+                self.joint_stream_last_dir[j] = direction
 
-            self.target_joints_deg = list(clamped_targets)
+                # Exact position tracking per joint to prevent floating-point drift
+                ref_joints[j] = round(ref_joints[j] + (steps / STEPS_PER_DEG[j]), 3)
+
+            self.target_joints_deg = list(ref_joints)
             if new_chunks_added:
                 self.state = "MOVING"
 
@@ -1080,6 +1156,8 @@ class RobotEngine:
         High-priority deterministic 100 Hz (10.0 ms) motion extraction loop.
         Pulls smoothed setpoints from the circular jitter buffer and passes them
         at mathematically uniform time intervals to the kinematics & stepping engine.
+        Includes Stream Dropout & Soft-Stop Protection: When streaming packets pause
+        for >60 ms, executes a controlled deceleration ramp to zero velocity.
         """
         loop = asyncio.get_running_loop()
         period = 0.010  # 10.0 ms strictly
@@ -1087,7 +1165,9 @@ class RobotEngine:
 
         while self.running:
             next_tick += period
+            t_now = time.monotonic()
             frame = self.jitter_buffer.pop()
+
             if frame is not None and self.homed and self.state != "ESTOP":
                 try:
                     if frame.opcode == 0x01:
@@ -1096,6 +1176,43 @@ class RobotEngine:
                         await self.servo_to_cartesian(frame.payload, dt=0.010)
                 except Exception as e:
                     logger.debug("Jitter buffer dispatch error: %s", e)
+            elif self.homed and self.state != "ESTOP":
+                # Check for stream dropout: if stream was active and paused for > 60 ms
+                dt_since_rx = t_now - self.stream_last_rx
+                if self.state == "MOVING" and dt_since_rx > 0.060:
+                    derivatives = self.teleop_filter.get_derivatives()
+                    any_moving = any(abs(d) > 0.1 for d in derivatives)
+
+                    if any_moving:
+                        dt_stop = 0.010
+                        decel_targets = list(self.target_joints_deg)
+                        still_active = False
+
+                        for j in range(6):
+                            v_j = derivatives[j]
+                            if abs(v_j) > 0.1:
+                                # Target smooth stop across ~80 ms (50-100 ms)
+                                a_decel = max(self.planner.joint_accels[j] * self.speed_scale, abs(v_j) / 0.08)
+                                new_speed = max(0.0, abs(v_j) - a_decel * dt_stop)
+                                if new_speed > 0.1:
+                                    v_new = math.copysign(new_speed, v_j)
+                                    still_active = True
+                                else:
+                                    v_new = 0.0
+                                decel_targets[j] += v_new * dt_stop
+                                self.teleop_filter.filters[j].last_dx = v_new
+                            else:
+                                self.teleop_filter.filters[j].last_dx = 0.0
+
+                        if still_active:
+                            await self.servo_to_joints(decel_targets, dt=dt_stop)
+                        else:
+                            # Reached complete standstill: transition smoothly to IDLE without snapback
+                            self.teleop_filter.reset(self.target_joints_deg)
+                            for j in range(6):
+                                self.joint_stream_last_interval[j] = 0
+                            if not any(len(q) > 0 for q in self.pending_chunks):
+                                self.state = "IDLE"
 
             sleep_duration = next_tick - loop.time()
             if sleep_duration > 0:

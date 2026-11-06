@@ -326,3 +326,47 @@ For smooth interactive 3D twin teleoperation without hand tremors or cursor nois
 Mathematical formulation:
 $$\alpha = \frac{1}{1 + \frac{\tau}{\Delta t}}, \quad \tau = \frac{1}{2\pi f_c}, \quad f_c = f_{c,\text{min}} + \beta \cdot |\dot{\theta}|$$
 
+### 8.4 $C^1$ Velocity Boundary Continuity & Quadratic Step Chunk Synthesis
+To ensure zero mechanical jerk and prevent abrupt motor accelerations between consecutive step chunks, the stepping engine enforces $C^1$ velocity continuity between consecutive step chunks $k-1$ and $k$:
+
+$$\dot{\theta}_{\text{start}, k} = \dot{\theta}_{\text{end}, k-1}$$
+
+For each chunk with step count $N$ and target average interval $\bar{i} = \frac{\text{mcu\_dt\_ticks}}{\text{abs\_steps}}$:
+1. **Entrance Interval**:
+   $$i_{\text{start}} = i_{\text{exit}, k-1}$$
+   If the axis was stationary ($i_{\text{exit}, k-1} = 0$), buffer starved, or if direction reversed, the engine starts from a conservative crawl interval ($i_{\text{start}} = 1200\text{ ticks} \approx 13.3\text{ kHz}$) and accelerates upward.
+2. **Exit Interval Calculation**:
+   $$i_{\text{end}} = 2\bar{i} - i_{\text{start}}$$
+   clamped to safe hardware limits $[160, 65535]$ ticks.
+3. **Step Interval Increment (`add`)**:
+   $$\text{add} = \text{round}\left(\frac{i_{\text{end}} - i_{\text{start}}}{N - 1}\right)$$
+   clamped to signed 8-bit range $[-128, 127]$ for `CompactStepChunk`.
+4. **Actual Chunk Exit Interval**:
+   $$i_{\text{exit}} = i_{\text{start}} + (N - 1) \cdot \text{add}$$
+   Chained directly into $i_{\text{start}}$ of the subsequent chunk.
+
+### 8.5 Stream Dropout & Soft-Stop Deceleration Protection
+When interactive teleoperation setpoints cease (e.g., user releases mouse gizmo, switches UI tabs, or transient network pause $>60\text{ ms}$):
+- The robot does NOT slam steppers abruptly to a dead stop.
+- The 100 Hz deterministic sampling worker detects $(t_{\text{now}} - t_{\text{last\_rx}}) > 60\text{ ms}$ and initiates a controlled deceleration ramp:
+
+$$\dot{\theta}_{j, \text{new}} = \text{sign}(\dot{\theta}_j) \cdot \max(0, |\dot{\theta}_j| - a_{\text{decel}, j} \cdot \Delta t)$$
+
+- Deceleration rate $a_{\text{decel}, j} = \max(a_{\text{joint}, j} \cdot \text{scale}, \frac{|\dot{\theta}_j|}{0.080})$ brings all axes smoothly to zero velocity within 50–100 ms ($80\text{ ms}$ nominal).
+- Once velocity reaches 0, the controller transitions to position-hold in `IDLE` state with zero position snapback.
+
+---
+
+## 9. Automated Hardware-In-The-Loop (HIL) Diagnostic Suite
+
+The ecosystem includes an automated, remote diagnostic test suite (`daemon/tools/run_hardware_tests.py`) deployable over SSH via `deploy/test_remote.ps1`:
+
+| Benchmark | Test Scope | Pass Criteria | Typical Hardware Performance |
+| :--- | :--- | :--- | :--- |
+| **TEST 1: Serial Sync & Watchdog** | 100 consecutive 'P' clock sync pings; 300 ms deliberate comms stall. | 100/100 pings, RTT < 5.0 ms, zero framing errors, Tier 2 watchdog safe state verified. | 100/100 pings @ 2.57 ms avg RTT; safe state verified. |
+| **TEST 2: Kinematic Accuracy** | 50 reachable 6-DOF Cartesian waypoints evaluated via Levenberg-Marquardt solver. | Max position error < 0.10 mm; compute latency < 1.5 ms on Pi 5. | Max error: 0.0719 mm; compute latency: 1.39 ms. |
+| **TEST 3: UDP Jitter Buffer** | 1,000 packed 32-byte UDP frames blasted at 100 Hz with synthetic ±15 ms temporal jitter. | Deterministic 100 Hz extraction, 0 buffer overflows, <= 50 ms max buffered latency. | 1,000 frames sent, 993 extracted @ 10.38 ms uniform rate, 0 overflows. |
+| **TEST 4: E-Stop & State Purge** | Queue loaded with step chunks; instant asynchronous ESTOP issued. | ACK latency < 5.0 ms; all 16 slots recovered per joint; ESTOP state confirmed. | ACK latency: 0.762 ms; 96/96 slots recovered; ESTOP state confirmed. |
+| **TEST 5: Teleoperation Conditioning** | Sub-pixel tremor filtering, outlier jump clamping, sweep tracking lag, soft-stop ramp. | Noise attenuation > 40%, jump rate clamped to $\omega_{\text{limit}}$, lag < 100 ms, soft-stop in 50–100 ms. | 85.0% noise reduction, clamped to 24.0°/s, 81.9 ms lag, 80 ms soft-stop. |
+
+

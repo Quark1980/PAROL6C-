@@ -29,6 +29,7 @@ if (-not $SkipSync) {
     # Sync python files
     scp "c:\Users\mseij\Desktop\PAROLC_Firmware\daemon\kinematics.py" "$TargetUser@${TargetHost}:$RemoteDir/daemon/"
     scp "c:\Users\mseij\Desktop\PAROLC_Firmware\daemon\trajectory_planner.py" "$TargetUser@${TargetHost}:$RemoteDir/daemon/"
+    scp "c:\Users\mseij\Desktop\PAROLC_Firmware\daemon\one_euro_filter.py" "$TargetUser@${TargetHost}:$RemoteDir/daemon/"
     scp "c:\Users\mseij\Desktop\PAROLC_Firmware\daemon\robot_engine.py" "$TargetUser@${TargetHost}:$RemoteDir/daemon/"
     scp "c:\Users\mseij\Desktop\PAROLC_Firmware\daemon\tools\run_hardware_tests.py" "$TargetUser@${TargetHost}:$RemoteDir/daemon/tools/"
     
