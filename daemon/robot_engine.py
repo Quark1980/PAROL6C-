@@ -313,7 +313,16 @@ class RobotEngine:
                             self.last_mcu_clock_host_time = t_now
                             self.endstops_mask = endstops
 
-                            is_busy = (flags & 0x04) != 0 or any(len(q) > 0 for q in self.pending_chunks)
+                            is_mcu_stepping = (flags & 0x04) != 0
+                            has_pending = any(len(q) > 0 for q in self.pending_chunks)
+                            is_busy = is_mcu_stepping or has_pending
+
+                            if not is_mcu_stepping:
+                                # When MCU is not actively executing step chunks, its ring buffers are empty
+                                self.free_slots = [16] * 6
+                                if not has_pending:
+                                    self.joint_stream_end_clock = [0] * 6
+
                             if flags & 0x01:
                                 self.state = "ESTOP"
                             elif flags & 0x02:
@@ -490,6 +499,8 @@ class RobotEngine:
         self.state = "ESTOP"
         for q in self.pending_chunks:
             q.clear()
+        self.free_slots = [16] * 6
+        self.joint_stream_end_clock = [0] * 6
         self.write_raw(b'E')
 
     def reset_system(self):
@@ -497,6 +508,8 @@ class RobotEngine:
         logger.info("System Reset / Re-energize requested.")
         for q in self.pending_chunks:
             q.clear()
+        self.free_slots = [16] * 6
+        self.joint_stream_end_clock = [0] * 6
         self.write_raw(b'R')
         self.state = "IDLE"
 
@@ -506,6 +519,8 @@ class RobotEngine:
         self.state = "HOMING"
         for q in self.pending_chunks:
             q.clear()
+        self.free_slots = [16] * 6
+        self.joint_stream_end_clock = [0] * 6
         payload = struct.pack("<B B B", ord('H'), mask & 0xFF, ord('\n'))
         self.write_raw(payload)
 
@@ -739,14 +754,25 @@ class RobotEngine:
     async def stream_pending_chunks(self):
         """
         Transmit pending step chunks to MCU as long as ring buffer slots are available.
-        Uses fast 'Q' frames with single-byte ACK/NAK.
+        Uses robust 'S' frames with XOR CRC which return 'K' <joint> <free_slots> '\n'.
         """
         async with self.streaming_lock:
             for j in range(6):
-                while self.free_slots[j] > 4 and len(self.pending_chunks[j]) > 0:
+                while self.free_slots[j] > 2 and len(self.pending_chunks[j]) > 0:
                     chunk = self.pending_chunks[j].pop(0)
-                    self.write_raw(chunk.serialize_q())
+                    self.write_raw(chunk.serialize())
                     self.free_slots[j] -= 1
+
+    async def chunk_pump_loop(self):
+        """
+        Continuous background pump: Feeds queued trajectory chunks into MCU ring buffers
+        as fast as hardware execution frees up buffer capacity.
+        """
+        while self.running:
+            if self.mcu_connected and self.state not in ("ESTOP", "HOMING"):
+                if any(len(q) > 0 for q in self.pending_chunks):
+                    await self.stream_pending_chunks()
+            await asyncio.sleep(0.01)
 
     # =========================================================================
     # BACKGROUND TELEMETRY & SYNC LOOPS
@@ -788,11 +814,13 @@ class RobotEngine:
                 "x": pose[0], "y": pose[1], "z": pose[2],
                 "rx": pose[3], "ry": pose[4], "rz": pose[5]
             },
+            "pose_mm_deg": [pose[0], pose[1], pose[2], pose[3], pose[4], pose[5]],
             "gripper_mm": self.gripper_mm,
             "endstops": {
                 f"j{i+1}": bool(self.endstops_mask & (1 << i))
                 for i in range(6)
             },
+            "endstops_list": [bool(self.endstops_mask & (1 << i)) for i in range(6)],
             "endstops_mask": self.endstops_mask,
             "endstop_invert_mask": self.endstop_invert_mask,
             "dir_invert_mask": self.dir_invert_mask,
@@ -834,7 +862,7 @@ class RobotEngine:
                 except Exception:
                     continue
 
-                cmd = payload.get("cmd", "").upper()
+                cmd = payload.get("cmd", payload.get("action", "")).upper()
 
                 if cmd == "ESTOP":
                     self.emergency_stop()
@@ -961,14 +989,32 @@ class RobotEngine:
                         continue
 
                     target_pose = payload.get("pose", None)
+                    if target_pose is None and "target" in payload:
+                        tgt = payload["target"]
+                        if isinstance(tgt, dict):
+                            x = float(tgt.get("x", 0.0))
+                            y = float(tgt.get("y", 0.0))
+                            z = float(tgt.get("z", 0.0))
+                            if abs(x) < 5.0 and abs(y) < 5.0 and abs(z) < 5.0:  # meters to mm
+                                x *= 1000.0
+                                y *= 1000.0
+                                z *= 1000.0
+                            r = float(tgt.get("roll", 0.0))
+                            p = float(tgt.get("pitch", 0.0))
+                            yw = float(tgt.get("yaw", 0.0))
+                            target_pose = [x, y, z, r, p, yw]
+                        elif isinstance(tgt, list) and len(tgt) == 6:
+                            target_pose = [float(v) for v in tgt]
                     speed = float(payload.get("speed", 0.5))
                     if target_pose and len(target_pose) == 6:
                         asyncio.create_task(self.execute_cartesian_move(target_pose, speed_factor=speed))
                         await websocket.send(json.dumps({"type": "ACK", "cmd": "MOVE_CARTESIAN", "status": "OK"}))
+                    else:
+                        await websocket.send(json.dumps({"type": "ACK", "cmd": "MOVE_CARTESIAN", "status": "FAIL", "msg": "Invalid target pose"}))
 
                 elif cmd == "SET_GRIPPER":
                     gap_mm = payload.get("mm", None)
-                    angle = payload.get("angle", None)
+                    angle = payload.get("angle", payload.get("position", None))
                     self.set_gripper(mm=gap_mm, angle=angle)
                     await websocket.send(json.dumps({"type": "ACK", "cmd": "SET_GRIPPER", "status": "OK"}))
 
@@ -1102,6 +1148,7 @@ class RobotEngine:
             asyncio.create_task(self.ping_loop()),
             asyncio.create_task(self.query_status_loop()),
             asyncio.create_task(self.broadcast_telemetry()),
+            asyncio.create_task(self.chunk_pump_loop()),
         ]
 
         logger.info("All engine systems operational. Ready for commands.")
