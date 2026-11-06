@@ -1,7 +1,8 @@
 /**
  * @file homing.h
  * @brief Non-blocking hardware homing sequencer for PAROL6 6-DOF arm.
- *        Implements the exact endstop retreat and latch behavior from printer.cfg.
+ *        Implements simultaneous [J1+J2+J3] homing and sequential wrist homing
+ *        with double J6 pass to achieve exact CAD reference pose.
  */
 
 #ifndef HOMING_H
@@ -13,13 +14,13 @@
 
 enum HomingState {
     HOMING_IDLE = 0,
-    HOMING_STAGE_J2,
-    HOMING_STAGE_J3,
-    HOMING_STAGE_J1,
-    HOMING_STAGE_J4,
-    HOMING_STAGE_J6,
-    HOMING_STAGE_J5,
-    HOMING_APPLY_CAD_HOME,
+    HOMING_STAGE_J123_PARALLEL, // [J1+J2+J3] simultaneously
+    HOMING_STAGE_J4,            // [J4]
+    HOMING_STAGE_J6_PASS1,      // [J6] first pass
+    HOMING_STAGE_J5,            // [J5] (with J6 -10° pre-move and -5° post-move)
+    HOMING_STAGE_J6_PASS2,      // [J6] second pass (to restore true zero after J5 moves)
+    HOMING_APPLY_CAD_HOME,      // Apply CAD reference zero offsets
+    HOMING_STAGE_SINGLE_JOINT,  // Fallback for standalone single-joint homing
     HOMING_COMPLETE,
     HOMING_ERROR
 };
@@ -30,7 +31,6 @@ enum JointSubState {
     SUBSTATE_SEEK_ENDSTOP,
     SUBSTATE_LATCH_RELEASE,
     SUBSTATE_LATCH_PRECISION,
-    SUBSTATE_LATCH_DEBOUNCE,
     SUBSTATE_RETREAT,
     SUBSTATE_POST_MOVE,
     SUBSTATE_DONE

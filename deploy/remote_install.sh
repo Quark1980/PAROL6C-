@@ -27,13 +27,14 @@ fi
 
 # 1. Stop conflicting services and free ports 8765 and 8000
 echo ">>> [1/6] Stopping conflicting services & clearing ports..."
-sudo systemctl stop klipper moonraker parol6-daemon parol6-kiosk 2>/dev/null || true
-sudo systemctl disable --now klipper moonraker KlipperScreen 2>/dev/null || true
-sudo systemctl mask klipper moonraker KlipperScreen 2>/dev/null || true
+sudo systemctl stop klipper moonraker parol6-daemon parol6 parol6-studio parol6-kiosk 2>/dev/null || true
+sudo systemctl disable --now klipper moonraker KlipperScreen parol6-studio parol6 2>/dev/null || true
+sudo systemctl mask klipper moonraker KlipperScreen parol6-studio parol6 2>/dev/null || true
 
 # Force kill any stale processes bound to our ports or serial device
-sudo fuser -k 8765/tcp 8000/tcp 2>/dev/null || true
+sudo fuser -k -9 8765/tcp 8000/tcp 2>/dev/null || true
 sudo pkill -f robot_daemon.py 2>/dev/null || true
+sudo pkill -f robot_engine.py 2>/dev/null || true
 
 # Add user to serial and display groups
 sudo usermod -a -G dialout,tty,video,input,render "${PI_USER}" 2>/dev/null || true
@@ -61,6 +62,8 @@ fi
 HEX_FILE="${TARGET_DIR}/parol6_core.ino.hex"
 if [ -f "${HEX_FILE}" ]; then
     echo ">>> [2/6] Flashing ATmega2560 on RAMPS 1.4 via avrdude..."
+    sudo fuser -k -9 "${SERIAL_PORT}" 2>/dev/null || true
+    sleep 1
     if ! command -v avrdude &>/dev/null; then
         echo "Installing avrdude..."
         sudo apt-get update -qq && sudo apt-get install -y -qq avrdude

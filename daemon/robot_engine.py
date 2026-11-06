@@ -221,8 +221,9 @@ class RobotEngine:
                     self.port_name = p
                     self.mcu_connected = True
                     logger.info("Serial communication established on %s.", p)
-                    # Sync direction invert mask
+                    # Sync direction and endstop invert masks
                     self.set_dir_invert_mask(self.dir_invert_mask)
+                    self.set_endstop_invert_mask(self.endstop_invert_mask)
                     return True
                 except Exception as e:
                     logger.warning("Failed opening port %s: %s", p, e)
@@ -1036,6 +1037,17 @@ class RobotEngine:
                     mask = int(payload.get("mask", 0x03))
                     self.set_dir_invert_mask(mask)
                     await websocket.send(json.dumps({"type": "ACK", "cmd": "SET_DIR_INVERT", "status": "OK"}))
+
+                elif cmd == "RESET_INVERT_MASKS":
+                    self.set_dir_invert_mask(0x03)
+                    self.set_endstop_invert_mask(0x00)
+                    await websocket.send(json.dumps({
+                        "type": "ACK",
+                        "cmd": "RESET_INVERT_MASKS",
+                        "status": "OK",
+                        "dir_invert_mask": self.dir_invert_mask,
+                        "endstop_invert_mask": self.endstop_invert_mask
+                    }))
 
                 # Persistent Homing Offset Trims
                 elif cmd == "SET_TRIMS":
