@@ -997,16 +997,16 @@ class RobotEngine:
 
         try:
             if length == 39:
-                header, opcode, seq, ts_ns, j1, j2, j3, j4, j5, j6, gripper, flags = struct.unpack_from("<BBHQ6fBBB", data)
+                header, opcode, seq, ts_ns, j1, j2, j3, j4, j5, j6, gripper, flags, _crc = struct.unpack_from("<BBHQ6fBBB", data)
             elif length == 31:
-                header, opcode, seq, j1, j2, j3, j4, j5, j6, gripper, flags = struct.unpack_from("<BBH6fBBB", data)
+                header, opcode, seq, j1, j2, j3, j4, j5, j6, gripper, flags, _crc = struct.unpack_from("<BBH6fBBB", data)
                 ts_ns = time.perf_counter_ns()
             elif length == 32:
                 header, opcode, seq, ts_32, j1, j2, j3, j4, j5, j6, gripper, flags = struct.unpack_from("<BBHI6fBB", data)
                 ts_ns = int(ts_32) * 1_000_000
             else:
                 return
-        except struct.error:
+        except (struct.error, ValueError):
             return
 
         self.last_client_heartbeat = time.monotonic()
