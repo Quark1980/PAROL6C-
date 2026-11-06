@@ -1,32 +1,32 @@
 {
-  "timestamp": 1793991549.267951,
-  "timestamp_str": "2026-11-06 18:59:09 UTC",
+  "timestamp": 1793999276.093322,
+  "timestamp_str": "2026-11-06 21:07:56 UTC",
   "tests": {
     "test_kinematics": {
       "test": "kinematic_verification_benchmark",
       "passed": true,
       "waypoints_tested": 50,
-      "max_position_error_mm": 0.0718,
-      "avg_position_error_mm": 0.0361,
-      "avg_solve_time_ms": 1.025,
-      "max_solve_time_ms": 1.364,
+      "max_position_error_mm": 0.0775,
+      "avg_position_error_mm": 0.0401,
+      "avg_solve_time_ms": 1.178,
+      "max_solve_time_ms": 2.145,
       "error": null
     },
     "test_streaming": {
       "test": "udp_jitter_buffer_streaming_stress",
       "passed": true,
       "frames_dispatched": 1000,
-      "frames_extracted": 990,
-      "starvation_events": 18,
+      "frames_extracted": 991,
+      "starvation_events": 19,
       "buffer_overflows": 0,
-      "avg_extraction_delta_ms": 10.344,
-      "max_extraction_jitter_ms": 60.015,
+      "avg_extraction_delta_ms": 10.384,
+      "max_extraction_jitter_ms": 60.025,
       "error": null
     },
     "test_estop": {
       "test": "estop_state_purge_latency",
       "passed": true,
-      "ack_latency_ms": 0.652,
+      "ack_latency_ms": 0.928,
       "queue_depth_post_estop": 96,
       "state_post_estop": "ESTOP",
       "error": null
@@ -34,7 +34,7 @@
     "test_teleop": {
       "test": "teleop_filtering_jitter_mitigation",
       "passed": true,
-      "static_noise_reduction_pct": 87.38,
+      "static_noise_reduction_pct": 86.4,
       "max_outlier_clamped_deg_s": 24.0,
       "tracking_lag_ms": 81.91,
       "soft_stop_steps": 8,

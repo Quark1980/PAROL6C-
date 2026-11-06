@@ -47,8 +47,8 @@ void step_engine_reschedule(void) {
         if (!joints[j].active && joints[j].count > 0) {
             StepChunk* c = &joints[j].queue[joints[j].tail];
             joints[j].active = true;
-            // Overdue pace clamp: ensure chunk cannot fire in a runaway burst if arrived late
-            if ((int32_t)(now - c->first_step_clock) > 0) {
+            // Overdue pace clamp: only intervene if the chunk arrived late by more than an entire step interval
+            if ((int32_t)(now - c->first_step_clock) > (int32_t)c->interval) {
                 joints[j].next_step_clock = now + c->interval;
             } else {
                 joints[j].next_step_clock = c->first_step_clock;
@@ -156,8 +156,9 @@ ISR(TIMER1_COMPA_vect) {
             joints[j].steps_left--;
 
             if (joints[j].steps_left > 0) {
-                // Next step in current chunk: pace from now if overdue to prevent 500 kHz runaway
-                if ((int32_t)(now - joints[j].next_step_clock) > 0) {
+                // Phase-locked microstep step scheduling: preserve exact interval timing
+                // Only clamp if severely overdue by more than an interval (e.g. queue starvation / comms stall)
+                if ((int32_t)(now - joints[j].next_step_clock) > (int32_t)joints[j].interval) {
                     joints[j].next_step_clock = now + joints[j].interval;
                 } else {
                     joints[j].next_step_clock += joints[j].interval;
@@ -169,9 +170,10 @@ ISR(TIMER1_COMPA_vect) {
                 joints[j].interval = (uint32_t)next_iv;
             } else {
                 // Chunk finished: pop next if queued
+                // Seamless C1 boundary: first step fires at c->first_step_clock without an extra interval delay
                 if (joints[j].count > 0) {
                     StepChunk* c = &joints[j].queue[joints[j].tail];
-                    if ((int32_t)(now - c->first_step_clock) > 0) {
+                    if ((int32_t)(now - c->first_step_clock) > (int32_t)c->interval) {
                         joints[j].next_step_clock = now + c->interval;
                     } else {
                         joints[j].next_step_clock = c->first_step_clock;

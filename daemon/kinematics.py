@@ -317,6 +317,88 @@ class Parol6Kinematics:
 
         return False, "Nominal"
 
+    def select_closest_wrist_branch(
+        self,
+        candidate_joints_deg: List[float],
+        seed_joints_deg: List[float],
+        weights: Optional[List[float]] = None
+    ) -> List[float]:
+        """
+        Enforce kinematic branch continuity for the 3-axis spherical wrist (J4, J5, J6).
+        The wrist configuration (q4, q5, q6) has an exact kinematically equivalent branch:
+            (q4 ± 180°, -q5, q6 ± 180°)
+        which produces the identical end-effector rotation matrix.
+        Evaluates both branches and all ±360° wraps within soft limits, selecting the
+        configuration that minimizes weighted distance to seed_joints_deg.
+        """
+        eff = self.get_effective_limits_deg()
+        w = weights or [1.0, 1.0, 1.0, 1.5, 2.0, 1.5]
+
+        q_cand = list(candidate_joints_deg)
+        q_seed = list(seed_joints_deg)
+
+        q4, q5, q6 = q_cand[3], q_cand[4], q_cand[5]
+
+        branch_wrist = [
+            (q4, q5, q6),
+            (q4 + 180.0, -q5, q6 + 180.0),
+            (q4 - 180.0, -q5, q6 + 180.0),
+            (q4 + 180.0, -q5, q6 - 180.0),
+            (q4 - 180.0, -q5, q6 - 180.0),
+        ]
+
+        valid_candidates = []
+        for b4, b5, b6 in branch_wrist:
+            for wrap4 in [0.0, -360.0, 360.0]:
+                for wrap6 in [0.0, -360.0, 360.0]:
+                    cand = [
+                        q_cand[0],
+                        q_cand[1],
+                        q_cand[2],
+                        b4 + wrap4,
+                        b5,
+                        b6 + wrap6
+                    ]
+                    in_limits = True
+                    for j in range(6):
+                        lo, hi = eff[j]
+                        if cand[j] < lo - 1e-2 or cand[j] > hi + 1e-2:
+                            in_limits = False
+                            break
+                    if in_limits:
+                        cost = sum(w[j] * ((cand[j] - q_seed[j]) ** 2) for j in range(6))
+                        valid_candidates.append((cost, cand))
+
+        if valid_candidates:
+            valid_candidates.sort(key=lambda x: x[0])
+            return [round(float(v), 3) for v in valid_candidates[0][1]]
+        return [round(float(v), 3) for v in q_cand]
+
+    def unwrap_revolute_joints(
+        self,
+        target_joints_deg: List[float],
+        reference_joints_deg: List[float]
+    ) -> List[float]:
+        """
+        Unwrap continuous / large-range revolute joints to shortest angular distance
+        relative to reference_joints_deg:
+            Δq_i = atan2(sin(target_i - ref_i), cos(target_i - ref_i))
+            unwrapped_i = ref_i + Δq_i
+        Preserves within soft limits.
+        """
+        eff = self.get_effective_limits_deg()
+        res = list(target_joints_deg)
+        for i in [3, 5]:  # J4 and J6
+            diff_rad = math.atan2(
+                math.sin(math.radians(target_joints_deg[i] - reference_joints_deg[i])),
+                math.cos(math.radians(target_joints_deg[i] - reference_joints_deg[i]))
+            )
+            unwrapped = reference_joints_deg[i] + math.degrees(diff_rad)
+            lo, hi = eff[i]
+            if lo - 1e-2 <= unwrapped <= hi + 1e-2:
+                res[i] = round(unwrapped, 3)
+        return res
+
     def solve_ik(
         self,
         target_pose_mm_deg: List[float],
@@ -327,7 +409,8 @@ class Parol6Kinematics:
     ) -> IKResult:
         """
         Solve 6-DOF Inverse Kinematics using Damped Least-Squares (DLS)
-        with adaptive Levenberg-Marquardt damping and soft-limit projection.
+        with adaptive Levenberg-Marquardt damping, null-space posture regularization,
+        and kinematic branch selection.
         Optimized single-pass FK + Jacobian execution.
         """
         T_target = self.pose_to_matrix(target_pose_mm_deg)
@@ -340,6 +423,7 @@ class Parol6Kinematics:
 
         q = np.deg2rad(np.asarray(seed_joints_deg[:6], dtype=np.float64))
         q = np.clip(q, q_min + 1e-3, q_max - 1e-3)
+        q_seed_rad = q.copy()
 
         base_damping = 0.02
         weights = np.array([1.0, 1.0, 1.0, 0.5, 0.5, 0.5], dtype=np.float64)
@@ -371,7 +455,10 @@ class Parol6Kinematics:
 
             # Convergence test
             if pos_err_mm < tolerance_mm and rot_err_deg < tolerance_deg:
-                sol_deg = [round(float(a), 3) for a in np.rad2deg(q)]
+                raw_sol_deg = [round(float(a), 3) for a in np.rad2deg(q)]
+                # Ensure closest wrist branch and shortest angular distance to seed
+                branch_sol_deg = self.select_closest_wrist_branch(raw_sol_deg, seed_joints_deg)
+                sol_deg = self.unwrap_revolute_joints(branch_sol_deg, seed_joints_deg)
                 is_sing, sing_msg = self.check_singularities(sol_deg)
                 return IKResult(
                     success=True,
@@ -384,11 +471,24 @@ class Parol6Kinematics:
                 )
 
             JJt = J @ J.T
-            dls_matrix = JJt + (base_damping ** 2) * np.eye(6, dtype=np.float64)
+            # Adaptive damping: increase damping near wrist singularity (J5 near 0)
+            is_near_sing = abs(q[4]) < math.radians(4.0)
+            damping = base_damping * (2.5 if is_near_sing else 1.0)
+
+            dls_matrix = JJt + (damping ** 2) * np.eye(6, dtype=np.float64)
             try:
-                dq = J.T @ np.linalg.solve(dls_matrix, error)
+                J_pinv = J.T @ np.linalg.inv(dls_matrix)
             except np.linalg.LinAlgError:
-                dq = J.T @ np.linalg.pinv(dls_matrix) @ error
+                J_pinv = J.T @ np.linalg.pinv(dls_matrix)
+
+            dq_task = J_pinv @ error
+
+            # Null-Space posture regularization: penalize deviation from seed posture
+            k_posture = 0.12
+            null_proj = np.eye(6, dtype=np.float64) - J_pinv @ J
+            dq_posture = null_proj @ (k_posture * (q_seed_rad - q))
+
+            dq = dq_task + dq_posture
 
             # Limit max joint update step per iteration (max 15 deg per step)
             max_step = math.radians(15.0)
@@ -400,7 +500,9 @@ class Parol6Kinematics:
             q = np.clip(q + dq, q_min, q_max)
 
         # Iterations exhausted without full convergence
-        sol_deg = [round(float(a), 3) for a in np.rad2deg(q)]
+        raw_sol_deg = [round(float(a), 3) for a in np.rad2deg(q)]
+        branch_sol_deg = self.select_closest_wrist_branch(raw_sol_deg, seed_joints_deg)
+        sol_deg = self.unwrap_revolute_joints(branch_sol_deg, seed_joints_deg)
         is_sing, sing_msg = self.check_singularities(sol_deg)
         return IKResult(
             success=False,

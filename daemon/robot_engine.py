@@ -358,6 +358,12 @@ class RobotEngine:
         self.last_stream_rx_time: float = 0.0
         self.commanded_jog_target: List[float] = [0.0] * 6
 
+        # Diagnostic & Pipeline Debug Telemetry
+        self.last_raw_target: List[float] = [0.0] * 6
+        self.last_ik_joints: List[float] = [0.0] * 6
+        self.last_filtered_joints: List[float] = [0.0] * 6
+        self.last_dispatched_chunk: List[Dict[str, Any]] = [{} for _ in range(6)]
+
         # Start serial listener worker thread
         self.serial_thread = threading.Thread(target=self._serial_worker_thread, daemon=True)
         self.serial_thread.start()
@@ -884,6 +890,17 @@ class RobotEngine:
         clamped_incoming = self.kinematics.clamp_joints(target_joints_deg)
         dt_clamped = max(0.005, min(0.2, float(dt)))
 
+        # Branch Jump & Discontinuity Hard Guard:
+        # If any single joint commands a jump > 5.0° across a streaming interval dt <= 0.05s,
+        # it indicates an IK branch flip or teleportation event. Reject the jump.
+        if dt_clamped <= 0.05:
+            ref_check = self.target_joints_deg if self.state == "MOVING" else self.joints_deg
+            for j in range(6):
+                step_delta = abs(clamped_incoming[j] - ref_check[j])
+                if step_delta > 5.0:
+                    logger.warning("IK branch jump detected on J%d (delta=%.2f° > 5.0° in dt=%.3fs). Rejecting discontinuous frame.", j + 1, step_delta, dt_clamped)
+                    return False
+
         # Ground teleop filter to live joint pose if stream was inactive or uninitialized
         if (now_mono - prev_rx > 0.25) or (self.last_gated_targets is None) or (self.teleop_filter.filters[0].last_x is None):
             self.last_gated_targets = list(self.joints_deg)
@@ -907,6 +924,7 @@ class RobotEngine:
 
         # 2. Adaptive 1-Euro Filter
         filtered_targets = self.teleop_filter.filter(gated_targets, dt_clamped)
+        self.last_filtered_joints = list(filtered_targets)
 
         # Base reference: use target_joints_deg from previous cycle if recent, else actual hardware joints
         if (self.state == "MOVING") and (now_mono - self._last_stream_time < 0.25):
@@ -982,12 +1000,9 @@ class RobotEngine:
                         i_exit = chunk_iv
                     else:
                         i_start_clamped = max(160, min(65535, i_start))
-                        # Target i_end to achieve average chunk interval bar_i: i_end = 2*bar_i - i_start
-                        i_end = 2 * bar_i - i_start_clamped
-                        i_end_clamped = max(160, min(65535, i_end))
-
-                        raw_add = int(round((i_end_clamped - i_start_clamped) / (count - 1)))
-                        add = max(-128, min(127, raw_add))
+                        # Damped velocity ramp: smoothly converge toward target bar_i without discrete alternating oscillation
+                        raw_add = int(round((bar_i - i_start_clamped) / count))
+                        add = max(-15, min(15, raw_add))
                         chunk_iv = i_start_clamped
                         i_exit = max(160, min(65535, chunk_iv + (count - 1) * add))
 
@@ -1124,9 +1139,11 @@ class RobotEngine:
 
         seed = self.target_joints_deg if self.state == "MOVING" else self.joints_deg
         ik_res = self.kinematics.solve_ik(target_pose, seed_joints_deg=seed)
+        self.last_raw_target = list(target_pose)
         if not ik_res.success:
             logger.warning("IK Failed for Cartesian target %s: %s", target_pose, ik_res.message)
             return False
+        self.last_ik_joints = list(ik_res.joints_deg)
 
         return await self.execute_joint_move(ik_res.joints_deg, speed_factor=speed_factor)
 
@@ -1139,9 +1156,11 @@ class RobotEngine:
             return False
         seed = self.target_joints_deg if self.state == "MOVING" else self.joints_deg
         ik_res = self.kinematics.solve_ik(target_pose, seed_joints_deg=seed)
+        self.last_raw_target = list(target_pose)
         if not ik_res.success:
             logger.debug("Cartesian streaming IK failure: %s", ik_res.message)
             return False
+        self.last_ik_joints = list(ik_res.joints_deg)
         return await self.servo_to_joints(ik_res.joints_deg, dt=dt)
 
     # =========================================================================
@@ -1347,6 +1366,14 @@ class RobotEngine:
                         dur = count * chunk.interval + (count * (count - 1) // 2) * chunk.add
                         chunk_end = (chunk.first_step_clock + max(dur, count * 160)) & 0xFFFFFFFF
                         self.in_flight_chunks[j].append(chunk_end)
+                        self.last_dispatched_chunk[j] = {
+                            "count": count,
+                            "interval": chunk.interval,
+                            "add": chunk.add,
+                            "dir": chunk.dir,
+                            "start_clock": chunk.first_step_clock,
+                            "end_clock": chunk_end
+                        }
                         chunks_sent += 1
                     else:
                         active_joints.remove(j)
@@ -1421,6 +1448,10 @@ class RobotEngine:
             "jitter_underruns": self.jitter_buffer.underrun_count,
             "jitter_overruns": self.jitter_buffer.overrun_count,
             "jitter_dropped_late": self.jitter_buffer.packets_dropped_late,
+            "last_raw_target": list(self.last_raw_target),
+            "last_ik_joints": list(self.last_ik_joints),
+            "last_filtered_joints": list(self.last_filtered_joints),
+            "last_dispatched_chunk": list(self.last_dispatched_chunk),
         }
 
     async def broadcast_telemetry(self):
@@ -1669,8 +1700,8 @@ class RobotEngine:
                     if axis in axis_map:
                         curr_pose[axis_map[axis]] += delta
                         ik_res = self.kinematics.solve_ik(curr_pose, seed_joints_deg=self.commanded_jog_target)
-                        if ik_res and ik_res[0]:
-                            self.commanded_jog_target = list(ik_res[1])
+                        if ik_res and ik_res.success:
+                            self.commanded_jog_target = list(ik_res.joints_deg)
                             await self.servo_to_joints(self.commanded_jog_target, dt=0.05)
                         await websocket.send(json.dumps({"type": "ACK", "cmd": "JOG_CARTESIAN", "status": "OK"}))
 
