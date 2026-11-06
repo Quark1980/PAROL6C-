@@ -16,6 +16,8 @@ StandardOutput=journal
 StandardError=journal
 LimitRTPRIO=99
 LimitMEMLOCK=infinity
+CPUSchedulingPolicy=fifo
+CPUSchedulingPriority=80
 
 [Install]
 WantedBy=multi-user.target

@@ -54,6 +54,25 @@ class StepChunkData:
             crc ^= b
         return b'S' + raw_body + bytes([crc])
 
+    def serialize_compact(self) -> bytes:
+        """
+        Encode chunk to 11-byte ultra-compact binary frame matching firmware:
+        [Header: 0x55][axis_dir: u8][start_clock: u32_le][step_count: u16_le][interval: u16_le][add_scaled: i8]
+        axis_dir packs joint index 0..5 in bits 0..2, dir in bit 3.
+        Transmits in 0.44 ms at 250,000 baud (< 0.5 ms per active joint).
+        """
+        axis_dir = (self.joint & 0x07) | ((self.dir & 0x01) << 3)
+        add_scaled = max(-128, min(127, int(self.add)))
+        return struct.pack(
+            "<B B I H H b",
+            0x55,
+            axis_dir,
+            self.first_step_clock & 0xFFFFFFFF,
+            self.step_count & 0xFFFF,
+            self.interval & 0xFFFF,
+            add_scaled,
+        )
+
     def serialize_q(self) -> bytes:
         """
         Encode chunk to 13-byte fast binary frame matching firmware:
@@ -89,8 +108,26 @@ class TrajectoryPlanner:
     Kinematic trajectory generator and step compression scheduler.
     """
 
+    # Conservative safe defaults to prevent high-gear-ratio steppers (J2, J3) from losing steps
+    DEFAULT_SPEEDS_DEG_S = [60.0, 30.0, 30.0, 40.0, 40.0, 60.0]
+    DEFAULT_ACCELS_DEG_S2 = [80.0, 40.0, 40.0, 60.0, 60.0, 80.0]
+
     def __init__(self):
-        pass
+        self.joint_speeds: List[float] = list(self.DEFAULT_SPEEDS_DEG_S)
+        self.joint_accels: List[float] = list(self.DEFAULT_ACCELS_DEG_S2)
+
+    def set_speed_limits(self, speeds: Optional[List[float]] = None, accels: Optional[List[float]] = None):
+        """Dynamically update maximum speed and acceleration limits per joint."""
+        if speeds and len(speeds) == 6:
+            for i in range(6):
+                val = float(speeds[i])
+                if val > 0:
+                    self.joint_speeds[i] = val
+        if accels and len(accels) == 6:
+            for i in range(6):
+                val = float(accels[i])
+                if val > 0:
+                    self.joint_accels[i] = val
 
     def plan_synchronized_move(
         self,
@@ -115,8 +152,8 @@ class TrajectoryPlanner:
             if abs_diffs[i] < 1e-4:
                 durations.append(0.0)
                 continue
-            v_lim = MAX_JOINT_SPEEDS_DEG_S[i] * speed_factor
-            a_lim = MAX_JOINT_ACCELS_DEG_S2[i] * accel_factor
+            v_lim = self.joint_speeds[i] * speed_factor
+            a_lim = self.joint_accels[i] * accel_factor
 
             # Triangular profile check: d_tri = v^2 / a
             d_tri = (v_lim ** 2) / a_lim

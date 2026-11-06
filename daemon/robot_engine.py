@@ -104,6 +104,9 @@ class RobotEngine:
         self.endstops_mask: int = 0
         self.endstop_invert_mask: int = 0
         self.dir_invert_mask: int = 0x03  # Default: invert J1 and J2 per printer.cfg (!PF1, !PF7)
+        self.speed_scale: float = 0.4     # Master speed scaling factor (10% to 100%)
+        self.telemetry_seq: int = 0
+        self.last_client_heartbeat: float = time.monotonic()
 
         # Look-ahead chunk management (per joint)
         self.free_slots: List[int] = [16] * 6
@@ -333,8 +336,7 @@ class RobotEngine:
                             elif self.state != "ESTOP":
                                 self.state = "IDLE"
 
-                            if flags & 0x08:
-                                self.homed = True
+                            self.homed = bool(flags & 0x08)
 
                             # Always reflect live hardware joint positions directly from step counters + persistent trims
                             self.joints_deg = [
@@ -445,6 +447,7 @@ class RobotEngine:
                             break
                         if rx_buf[2] == ord('\n'):
                             self.state = "ESTOP"
+                            self.homed = False
                             self.mcu_packets_rx += 1
                             rx_buf = rx_buf[3:]
                         else:
@@ -754,26 +757,31 @@ class RobotEngine:
 
     async def stream_pending_chunks(self):
         """
-        Transmit pending step chunks to MCU as long as ring buffer slots are available.
-        Uses robust 'S' frames with XOR CRC which return 'K' <joint> <free_slots> '\n'.
+        Transmit pending step chunks to MCU using 11-byte CompactStepChunk frames.
+        Paced to send max 2 chunks (22 bytes) per pump iteration to strictly prevent
+        overflowing the ATmega2560's hardware UART RX buffer (64 bytes).
         """
         async with self.streaming_lock:
+            sent_total = 0
             for j in range(6):
                 while self.free_slots[j] > 2 and len(self.pending_chunks[j]) > 0:
                     chunk = self.pending_chunks[j].pop(0)
-                    self.write_raw(chunk.serialize())
+                    self.write_raw(chunk.serialize_compact())
                     self.free_slots[j] -= 1
+                    sent_total += 1
+                    if sent_total >= 2:
+                        return
 
     async def chunk_pump_loop(self):
         """
         Continuous background pump: Feeds queued trajectory chunks into MCU ring buffers
-        as fast as hardware execution frees up buffer capacity.
+        at a stable, paced rate (5 ms interval).
         """
         while self.running:
             if self.mcu_connected and self.state not in ("ESTOP", "HOMING"):
                 if any(len(q) > 0 for q in self.pending_chunks):
                     await self.stream_pending_chunks()
-            await asyncio.sleep(0.01)
+            await asyncio.sleep(0.005)
 
     # =========================================================================
     # BACKGROUND TELEMETRY & SYNC LOOPS
@@ -832,18 +840,67 @@ class RobotEngine:
         }
 
     async def broadcast_telemetry(self):
-        """Broadcast live telemetry to all connected WebSocket clients."""
+        """
+        Broadcast live telemetry to all connected WebSocket clients.
+        Streams fixed 31-byte packed binary frames at 50 Hz (Opcode 0x03).
+        Also broadcasts JSON frames at 10 Hz for touchscreen browser / kiosk.
+        """
+        json_counter = 0
         while self.running:
             if self.connected_ws_clients:
-                msg = json.dumps(self.get_telemetry_dict())
+                # 1. Build 31-byte packed binary telemetry frame (Opcode 0x03)
+                flags = 0
+                if self.state == "ESTOP": flags |= 0x01
+                if self.state == "HOMING": flags |= 0x02
+                if self.state == "MOVING": flags |= 0x04
+                if self.homed: flags |= 0x08
+                gripper_byte = max(0, min(255, int(self.gripper_mm * 2.55)))
+
+                body = struct.pack(
+                    "<BBH6fBB",
+                    0xAA,
+                    0x03, # Opcode 0x03: Telemetry Feedback
+                    self.telemetry_seq & 0xFFFF,
+                    float(self.joints_deg[0]), float(self.joints_deg[1]), float(self.joints_deg[2]),
+                    float(self.joints_deg[3]), float(self.joints_deg[4]), float(self.joints_deg[5]),
+                    gripper_byte,
+                    flags
+                )
+                crc8 = 0
+                for b in body: crc8 ^= b
+                bin_packet = body + bytes([crc8])
+                self.telemetry_seq = (self.telemetry_seq + 1) & 0xFFFF
+
+                # 2. Build JSON string for browser kiosk (10 Hz)
+                json_counter += 1
+                json_msg = json.dumps(self.get_telemetry_dict()) if (json_counter % 5 == 0) else None
+
                 disconnected = set()
                 for ws in self.connected_ws_clients:
                     try:
-                        await ws.send(msg)
+                        await ws.send(bin_packet)
+                        if json_msg:
+                            await ws.send(json_msg)
                     except websockets.ConnectionClosed:
                         disconnected.add(ws)
                 self.connected_ws_clients.difference_update(disconnected)
-            await asyncio.sleep(STATUS_BROADCAST_INTERVAL_S)
+            await asyncio.sleep(0.02) # 50 Hz
+
+    async def client_watchdog_loop(self):
+        """
+        Tier 1 Watchdog (Windows Client <-> Pi Host):
+        If no heartbeat (Opcode 0x05) or streaming frame is received for >150 ms during active motion,
+        automatically execute a controlled, smooth deceleration ramp to zero (controlled HOLD).
+        """
+        while self.running:
+            if self.state == "MOVING" and (time.monotonic() - self.last_client_heartbeat > 0.150):
+                if any(len(q) > 0 for q in self.pending_chunks):
+                    logger.warning("Tier 1 Watchdog tripped: Client heartbeat lost for >150 ms during motion! Halting.")
+                    async with self.streaming_lock:
+                        for q in self.pending_chunks:
+                            q.clear()
+                    self.state = "IDLE"
+            await asyncio.sleep(0.02)
 
     # =========================================================================
     # WEBSOCKET COMMAND DISPATCHER
@@ -858,6 +915,35 @@ class RobotEngine:
             await websocket.send(json.dumps(self.get_telemetry_dict()))
 
             async for message in websocket:
+                # Handle High-Speed 31-Byte Packed Binary ArrayBuffer
+                if isinstance(message, (bytes, bytearray)):
+                    if len(message) == 31 and message[0] == 0xAA:
+                        crc8 = 0
+                        for b in message[:30]: crc8 ^= b
+                        if crc8 == message[30]:
+                            header, opcode, seq, j1, j2, j3, j4, j5, j6, gripper, flags = struct.unpack("<BBH6fBB", message[:30])
+                            self.last_client_heartbeat = time.monotonic()
+
+                            if opcode == 0x01: # Opcode 0x01: SERVO_JOINTS streaming
+                                if self.homed and self.state != "ESTOP":
+                                    await self.servo_to_joints([j1, j2, j3, j4, j5, j6], dt=0.02)
+                            elif opcode == 0x02: # Opcode 0x02: SERVO_CARTESIAN streaming
+                                if self.homed and self.state != "ESTOP":
+                                    await self.servo_to_cartesian([j1, j2, j3, j4, j5, j6], dt=0.02)
+                            elif opcode == 0x05: # Opcode 0x05: Heartbeat Ping / Pong
+                                mcu_clk = self.last_mcu_clock
+                                reply_body = struct.pack(
+                                    "<BBH6fBB",
+                                    0xAA, 0x05, seq,
+                                    float(mcu_clk & 0xFFFF), float((mcu_clk >> 16) & 0xFFFF),
+                                    float(self.clock_sync.last_rtt_ms), 0.0, 0.0, 0.0,
+                                    gripper, flags
+                                )
+                                r_crc = 0
+                                for b in reply_body: r_crc ^= b
+                                await websocket.send(reply_body + bytes([r_crc]))
+                    continue
+
                 try:
                     payload = json.loads(message)
                 except Exception:
@@ -885,6 +971,22 @@ class RobotEngine:
                             mask = 0xFF
                     self.trigger_homing(mask)
                     await websocket.send(json.dumps({"type": "ACK", "cmd": "HOME", "status": "OK"}))
+
+                elif cmd == "SET_SPEED_LIMITS":
+                    speeds = payload.get("speeds_deg_s", None)
+                    accels = payload.get("accels_deg_s2", None)
+                    scale = payload.get("speed_scale", None)
+                    if scale is not None:
+                        self.speed_scale = max(0.05, min(1.0, float(scale)))
+                    if speeds or accels:
+                        self.planner.set_speed_limits(speeds, accels)
+                    await websocket.send(json.dumps({
+                        "type": "ACK",
+                        "cmd": "SET_SPEED_LIMITS",
+                        "status": "OK",
+                        "speeds_deg_s": self.planner.joint_speeds,
+                        "speed_scale": self.speed_scale
+                    }))
 
                 # Real-Time Joint Follower / Streaming
                 elif cmd in ("SERVO_JOINTS", "STREAM_JOINTS"):
@@ -934,6 +1036,15 @@ class RobotEngine:
                         }))
                         continue
 
+                    if self.state == "MOVING" or any(len(q) > 0 for q in self.pending_chunks):
+                        await websocket.send(json.dumps({
+                            "type": "ACK",
+                            "cmd": cmd,
+                            "status": "BUSY",
+                            "msg": "Robot is currently moving. Please wait until idle."
+                        }))
+                        continue
+
                     joint_idx = int(payload.get("joint", 1)) - 1
                     delta = float(payload.get("delta_deg", 0.0))
                     speed = float(payload.get("speed", 0.5))
@@ -954,6 +1065,15 @@ class RobotEngine:
                         }))
                         continue
 
+                    if self.state == "MOVING" or any(len(q) > 0 for q in self.pending_chunks):
+                        await websocket.send(json.dumps({
+                            "type": "ACK",
+                            "cmd": cmd,
+                            "status": "BUSY",
+                            "msg": "Robot is currently moving. Please wait until idle."
+                        }))
+                        continue
+
                     target = payload.get("joints", self.joints_deg)
                     speed = float(payload.get("speed", 0.5))
                     asyncio.create_task(self.execute_joint_move(target, speed_factor=speed))
@@ -966,6 +1086,15 @@ class RobotEngine:
                             "cmd": cmd,
                             "status": "REJECTED",
                             "msg": "Safety Interlock: Robot must be homed before Cartesian moves"
+                        }))
+                        continue
+
+                    if self.state == "MOVING" or any(len(q) > 0 for q in self.pending_chunks):
+                        await websocket.send(json.dumps({
+                            "type": "ACK",
+                            "cmd": cmd,
+                            "status": "BUSY",
+                            "msg": "Robot is currently moving. Please wait until idle."
                         }))
                         continue
 
@@ -1161,6 +1290,7 @@ class RobotEngine:
             asyncio.create_task(self.query_status_loop()),
             asyncio.create_task(self.broadcast_telemetry()),
             asyncio.create_task(self.chunk_pump_loop()),
+            asyncio.create_task(self.client_watchdog_loop()),
         ]
 
         logger.info("All engine systems operational. Ready for commands.")

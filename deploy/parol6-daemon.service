@@ -5,6 +5,7 @@ Wants=network.target
 
 [Service]
 Type=simple
+# Generated dynamically during deployment to match active user
 User=mark
 Group=mark
 WorkingDirectory=/home/mark/parol6
@@ -15,6 +16,8 @@ StandardOutput=journal
 StandardError=journal
 LimitRTPRIO=99
 LimitMEMLOCK=infinity
+CPUSchedulingPolicy=fifo
+CPUSchedulingPriority=80
 
 [Install]
 WantedBy=multi-user.target

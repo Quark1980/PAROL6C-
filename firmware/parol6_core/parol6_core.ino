@@ -165,6 +165,67 @@ static inline void handle_q_step_chunk(const uint8_t* payload) {
     }
 }
 
+// ============================================================================
+// HARDWARE WATCHDOG & TIMING
+// ============================================================================
+static uint32_t last_comm_time_ms = 0;
+
+// 11-byte Compact Binary Step Chunk (Header: 0x55 sync byte)
+// Layout: [axis_dir: u8][start_clock: u32_le][step_count: u16_le][interval: u16_le][add_scaled: i8]
+// axis_dir: Bits 0-2: Axis (0-5), Bit 3: Direction (0/1)
+static inline void handle_compact_step_chunk(const uint8_t* payload) {
+    uint8_t axis_dir = payload[0];
+    uint8_t joint = axis_dir & 0x07;
+    uint8_t dir = (axis_dir >> 3) & 0x01;
+
+    if (joint >= NUM_JOINTS) {
+        Serial.write('N');
+        Serial.write(joint);
+        Serial.write(0x03); // Invalid joint
+        Serial.write('\n');
+        return;
+    }
+
+    if (estop_active) {
+        Serial.write('N');
+        Serial.write(joint);
+        Serial.write(0x04); // Rejected: ESTOP
+        Serial.write('\n');
+        return;
+    }
+
+    if (homing_get_homed_mask() != 0x3F) {
+        Serial.write('N');
+        Serial.write(joint);
+        Serial.write(0x05); // Rejected: Must home first
+        Serial.write('\n');
+        return;
+    }
+
+    StepChunk chunk;
+    memcpy(&chunk.first_step_clock, &payload[1], 4);
+    memcpy(&chunk.step_count,       &payload[5], 2);
+    memcpy(&chunk.interval,         &payload[7], 2);
+    int8_t add_scaled = (int8_t)payload[9];
+    chunk.add = (int16_t)add_scaled;
+    chunk.dir = dir;
+
+    bool ok = step_engine_push_chunk(joint, &chunk);
+    if (ok) {
+        uint8_t free_slots = step_engine_free_slots(joint);
+        Serial.write('K');
+        Serial.write(joint);
+        Serial.write(free_slots);
+        Serial.write('\n');
+    } else {
+        Serial.write('N');
+        Serial.write(joint);
+        Serial.write(0x01); // Buffer full
+        Serial.write('\n');
+    }
+}
+
+// Full 14-byte Step Chunk ('S' packet)
 static inline void handle_step_chunk(const uint8_t* payload) {
     uint8_t joint = payload[0];
     if (joint >= NUM_JOINTS) {
@@ -301,16 +362,26 @@ void loop() {
     // 1. Service non-blocking homing state machine
     homing_poll();
 
-    // Reset buffer index if framed packet reception stalled (> 50 ms)
-    if (rx_idx > 0 && (millis() - last_rx_time_ms > 50)) {
+    // 2. Tier 2 Hardware Watchdog: de-energize coils if serial communication ceases for >250 ms during active motion
+    if (!estop_active && !homing_is_active()) {
+        if (last_comm_time_ms > 0 && (millis() - last_comm_time_ms > 250)) {
+            if (step_engine_is_busy()) {
+                handle_estop();
+            }
+        }
+    }
+
+    // Reset buffer index if framed packet reception stalled (> 20 ms)
+    if (rx_idx > 0 && (millis() - last_rx_time_ms > 20)) {
         rx_idx = 0;
     }
 
-    // 2. Process incoming serial commands
+    // 3. Process incoming serial commands
     while (Serial.available() > 0) {
         int b = Serial.read();
         if (b < 0) break;
         last_rx_time_ms = millis();
+        last_comm_time_ms = last_rx_time_ms;
 
         // 1. When NOT inside a packet payload: parse instant single-byte triggers or packet headers
         if (rx_idx == 0) {
@@ -328,16 +399,21 @@ void loop() {
                 continue;
             }
 
-            // Start of framed command
-            if (b == 'Q' || b == 'S' || b == 'G' || b == 'H' || b == 'M' || b == 'I' || b == 'D') {
+            // Start of framed command: 0x55 (CompactStepChunk), 'C', 'Q', 'S', 'G', 'H', 'M', 'I', 'D'
+            if (b == 0x55 || b == 'C' || b == 'Q' || b == 'S' || b == 'G' || b == 'H' || b == 'M' || b == 'I' || b == 'D') {
                 rx_buffer[rx_idx++] = (uint8_t)b;
             }
         } else {
             // Inside framed packet: store bytes strictly into buffer without corrupting binary data
             rx_buffer[rx_idx++] = (uint8_t)b;
 
+            // 0x55 or 'C': 11-byte CompactStepChunk
+            if ((rx_buffer[0] == 0x55 || rx_buffer[0] == 'C') && rx_idx == 11) {
+                handle_compact_step_chunk(&rx_buffer[1]);
+                rx_idx = 0;
+            }
             // 'Q' packet requires header 'Q' + 12 bytes = 13 bytes total
-            if (rx_buffer[0] == 'Q' && rx_idx == 13) {
+            else if (rx_buffer[0] == 'Q' && rx_idx == 13) {
                 handle_q_step_chunk(&rx_buffer[1]);
                 rx_idx = 0;
             }
@@ -348,34 +424,46 @@ void loop() {
             }
             // 'M' packet requires header 'M' + 6 bytes payload + '\n' = 8 bytes total
             else if (rx_buffer[0] == 'M' && rx_idx == 8) {
-                handle_manual_step(&rx_buffer[1]);
+                if (rx_buffer[7] == '\n') {
+                    handle_manual_step(&rx_buffer[1]);
+                }
                 rx_idx = 0;
             }
             // 'I' packet requires header 'I' + 1 byte mask + '\n' = 3 bytes total
             else if (rx_buffer[0] == 'I' && rx_idx == 3) {
-                handle_set_invert(rx_buffer[1]);
+                if (rx_buffer[2] == '\n') {
+                    handle_set_invert(rx_buffer[1]);
+                }
                 rx_idx = 0;
             }
             // 'D' packet requires header 'D' + 1 byte mask + '\n' = 3 bytes total
             else if (rx_buffer[0] == 'D' && rx_idx == 3) {
-                handle_set_dir_invert(rx_buffer[1]);
+                if (rx_buffer[2] == '\n') {
+                    handle_set_dir_invert(rx_buffer[1]);
+                }
                 rx_idx = 0;
             }
             // 'G' packet with 2 bytes pulse_us + '\n' = 4 bytes total
             else if (rx_buffer[0] == 'G' && rx_idx == 4) {
-                handle_gripper(&rx_buffer[1]);
+                if (rx_buffer[3] == '\n') {
+                    handle_gripper(&rx_buffer[1]);
+                }
                 rx_idx = 0;
             }
             // 'G' packet with 1 byte position + '\n' = 3 bytes total
-            else if (rx_buffer[0] == 'G' && rx_idx == 3 && rx_buffer[2] == '\n') {
-                uint16_t pulse = 500 + (uint16_t)rx_buffer[1] * 2000 / 255;
-                set_gripper_pulse_us(pulse);
-                Serial.write((uint8_t)0x06); // ACK
+            else if (rx_buffer[0] == 'G' && rx_idx == 3) {
+                if (rx_buffer[2] == '\n') {
+                    uint16_t pulse = 500 + (uint16_t)rx_buffer[1] * 2000 / 255;
+                    set_gripper_pulse_us(pulse);
+                    Serial.write((uint8_t)0x06); // ACK
+                }
                 rx_idx = 0;
             }
             // 'H' packet requires header 'H' + 1 byte mask + '\n' = 3 bytes total
             else if (rx_buffer[0] == 'H' && rx_idx == 3) {
-                handle_homing_cmd(rx_buffer[1]);
+                if (rx_buffer[2] == '\n') {
+                    handle_homing_cmd(rx_buffer[1]);
+                }
                 rx_idx = 0;
             }
             // Safety buffer overrun reset

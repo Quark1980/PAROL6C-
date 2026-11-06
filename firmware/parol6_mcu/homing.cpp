@@ -309,6 +309,7 @@ void homing_start(uint8_t mask) {
 void homing_abort(void) {
     current_stage = HOMING_IDLE;
     active_mask = 0;
+    homed_mask = 0; // Reset homed mask: position is lost on abort/estop
     for (uint8_t i = 0; i < NUM_JOINTS; i++) {
         joint_ctx[i].done = true;
     }
