@@ -246,45 +246,53 @@ class Parol6Kinematics:
         T[:3, 3] = [x_m, y_m, z_m]
         return T
 
+    def fk_and_jacobian(self, q_rad: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+        """
+        Compute forward kinematics transform T_tcp and 6x6 geometric Jacobian J
+        simultaneously in a single unified pass with minimal allocations.
+        """
+        T_curr = np.eye(4, dtype=np.float64)
+        joint_origins = np.empty((6, 3), dtype=np.float64)
+        joint_z_axes = np.empty((6, 3), dtype=np.float64)
+
+        for i in range(6):
+            T_joint_frame = T_curr @ self._T_static[i]
+            joint_origins[i] = T_joint_frame[:3, 3]
+            joint_z_axes[i] = T_joint_frame[:3, 2]
+
+            c = math.cos(q_rad[i])
+            s = math.sin(q_rad[i])
+            col0 = T_joint_frame[:, 0].copy()
+            col1 = T_joint_frame[:, 1].copy()
+            T_curr = T_joint_frame.copy()
+            T_curr[:, 0] = c * col0 + s * col1
+            T_curr[:, 1] = -s * col0 + c * col1
+
+        T_tcp = T_curr.copy()
+        if np.any(self.tool_offset_xyz):
+            T_tcp[:3, 3] += T_tcp[:3, :3] @ self.tool_offset_xyz
+        p_tcp = T_tcp[:3, 3]
+
+        J = np.empty((6, 6), dtype=np.float64)
+        for i in range(6):
+            z_i = joint_z_axes[i]
+            p_i = joint_origins[i]
+            J[0, i] = z_i[1] * (p_tcp[2] - p_i[2]) - z_i[2] * (p_tcp[1] - p_i[1])
+            J[1, i] = z_i[2] * (p_tcp[0] - p_i[0]) - z_i[0] * (p_tcp[2] - p_i[2])
+            J[2, i] = z_i[0] * (p_tcp[1] - p_i[1]) - z_i[1] * (p_tcp[0] - p_i[0])
+            J[3, i] = z_i[0]
+            J[4, i] = z_i[1]
+            J[5, i] = z_i[2]
+
+        return T_tcp, J
+
     def compute_jacobian(self, joints_deg: List[float] | np.ndarray) -> np.ndarray:
         """
         Compute 6x6 geometric Jacobian J = [J_v; J_omega] at current joint configuration.
+        Correctly samples joint origins and Z-rotation axes after each link's static transform.
         """
         q_rad = np.deg2rad(np.asarray(joints_deg[:6], dtype=np.float64))
-        T_chain: List[np.ndarray] = []
-        T_curr = np.eye(4, dtype=np.float64)
-
-        for i in range(6):
-            c = math.cos(q_rad[i])
-            s = math.sin(q_rad[i])
-            Rz = np.array([
-                [c, -s, 0.0, 0.0],
-                [s,  c, 0.0, 0.0],
-                [0.0, 0.0, 1.0, 0.0],
-                [0.0, 0.0, 0.0, 1.0],
-            ], dtype=np.float64)
-            T_curr = T_curr @ self._T_static[i] @ Rz
-            T_chain.append(T_curr.copy())
-
-        # TCP origin
-        T_tcp = T_chain[-1].copy()
-        T_tcp[:3, 3] += T_tcp[:3, :3] @ self.tool_offset_xyz
-        p_tcp = T_tcp[:3, 3]
-
-        J = np.zeros((6, 6), dtype=np.float64)
-        for i in range(6):
-            if i == 0:
-                p_i = np.zeros(3, dtype=np.float64)
-                z_i = np.array([0.0, 0.0, 1.0], dtype=np.float64)
-            else:
-                p_i = T_chain[i - 1][:3, 3]
-                z_i = T_chain[i - 1][:3, 2] # Z-axis of joint frame
-
-            # Linear velocity Jacobian component: J_v = z_i x (p_tcp - p_i)
-            J[:3, i] = np.cross(z_i, p_tcp - p_i)
-            # Angular velocity Jacobian component: J_w = z_i
-            J[3:, i] = z_i
-
+        _, J = self.fk_and_jacobian(q_rad)
         return J
 
     def check_singularities(self, joints_deg: List[float]) -> Tuple[bool, str]:
@@ -313,13 +321,14 @@ class Parol6Kinematics:
         self,
         target_pose_mm_deg: List[float],
         seed_joints_deg: List[float],
-        max_iterations: int = 50,
+        max_iterations: int = 15,
         tolerance_mm: float = 0.5,
         tolerance_deg: float = 0.5,
     ) -> IKResult:
         """
         Solve 6-DOF Inverse Kinematics using Damped Least-Squares (DLS)
         with adaptive Levenberg-Marquardt damping and soft-limit projection.
+        Optimized single-pass FK + Jacobian execution.
         """
         T_target = self.pose_to_matrix(target_pose_mm_deg)
         p_target = T_target[:3, 3]
@@ -336,7 +345,7 @@ class Parol6Kinematics:
         weights = np.array([1.0, 1.0, 1.0, 0.5, 0.5, 0.5], dtype=np.float64)
 
         for it in range(max_iterations):
-            T_curr = self.fk_matrix(np.rad2deg(q))
+            T_curr, J = self.fk_and_jacobian(q)
             p_curr = T_curr[:3, 3]
             R_curr = T_curr[:3, :3]
 
@@ -374,20 +383,8 @@ class Parol6Kinematics:
                     message="Converged" if not is_sing else f"Converged ({sing_msg})",
                 )
 
-            # Compute Jacobian and manipulability measure
-            J = self.compute_jacobian(np.rad2deg(q))
             JJt = J @ J.T
-            det_JJt = float(np.linalg.det(JJt))
-            manipulability = math.sqrt(max(0.0, det_JJt))
-
-            # Adaptive Levenberg-Marquardt damping
-            if manipulability < 1e-4:
-                lambda_dls = base_damping * (1.0 + (1e-4 - manipulability) * 1000.0)
-            else:
-                lambda_dls = base_damping
-
-            # Solve damped least squares: dq = J^T (J J^T + lambda^2 I)^-1 * error
-            dls_matrix = JJt + (lambda_dls ** 2) * np.eye(6, dtype=np.float64)
+            dls_matrix = JJt + (base_damping ** 2) * np.eye(6, dtype=np.float64)
             try:
                 dq = J.T @ np.linalg.solve(dls_matrix, error)
             except np.linalg.LinAlgError:

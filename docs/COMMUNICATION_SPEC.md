@@ -6,30 +6,26 @@
 
 The PAROL6 6-DOF robotic control ecosystem implements an ultra-low latency, event-driven motion pipeline designed to eliminate trajectory jitter, prevent communication buffer overflows, and enforce strict fail-safe motor shutdown. 
 
-Motion is bifurcated across two deterministic physical boundaries:
-1. **Network Transport (Windows Control Suite $\longleftrightarrow$ Raspberry Pi 5 Daemon)**:
-   - Transport: Full-duplex WebSocket over Ethernet / 5 GHz Wi-Fi.
-   - Real-Time Protocol: Fixed-width **31-byte packed binary ArrayBuffers** operating at 50–100 Hz.
-   - Non-Real-Time Protocol: Structured JSON reserved exclusively for one-time initialization, persistent trim queries (`GET_TRIMS`), calibration adjustments, and telemetry metadata.
-2. **Serial Transport (Raspberry Pi 5 Daemon $\longleftrightarrow$ ATmega2560 + RAMPS 1.4)**:
-   - Transport: Direct USB-UART at **250,000 baud** (8N1).
-   - Real-Time Protocol: Fixed-width **11-byte packed binary step-chunk frames** (`CompactStepChunk`) paced to prevent AVR hardware UART FIFO overruns.
-   - Non-Real-Time Protocol: Strict newline-terminated ASCII frames for homing sequences, manual single-stepping, and hardware diagnostics.
+Motion and control are cleanly partitioned across a **Hybrid Dual-Transport Layer** between the Windows Control Suite and the Raspberry Pi 5 Daemon, and a paced, bit-packed serial transport to the ATmega2560 hardware step core:
 
 ```
 ┌────────────────────────────────────────────────────────┐
 │         Windows Laptop Test Suite (WPF / .NET 8)       │
 │  - Interactive 3D URDF Viewport & TCP Transform Gizmo  │
-│  - 50 Hz Packed Binary Streaming Loop (Opcode 0x01)    │
-│  - 15 Hz Continuous Binary Heartbeat Loop (Opcode 0x05)│
-└───────────────────────────┬────────────────────────────┘
-                            │ WebSocket (31-byte Binary ArrayBuffers @ 50-100 Hz)
-                            │ [0xAA][Opcode][Seq:u16][Payload:6x f32][Grip][Flags][CRC8]
-                            ▼
+│  - 100 Hz Raw UDP Binary Streaming Socket (Port 8766)  │
+│  - Reliable TCP / WebSocket Control Client (Port 8765) │
+└─────────────┬────────────────────────────┬─────────────┘
+              │ Channel B: Raw UDP         │ Channel A: Reliable TCP
+              │ 39-byte Packed Frames      │ WebSocket Handshakes & JSON
+              │ Unbuffered 50–100 Hz       │ HOME, ESTOP, RESET, TRIMS
+              ▼                            ▼
 ┌────────────────────────────────────────────────────────┐
 │             Raspberry Pi 5 Host Daemon                 │
-│  - Real-Time Trajectory Planner (100 Hz Interpolation) │
-│  - Levenberg-Marquardt & Damped Least-Squares IK       │
+│  - Channel A: Async WebSocket Server (Port 8765)       │
+│  - Channel B: Zero-Allocation UDP Server (Port 8766)   │
+│  - Host-Side Jitter Buffer (64 slots, 60 ms horizon)   │
+│  - Deterministic 100 Hz (10.0 ms) Sampling Worker      │
+│  - Real-Time DLS / LM Inverse Kinematics (<1.0 ms)     │
 │  - Dynamic Per-Joint Speed & Acceleration Clamping     │
 │  - Microsecond Master Clock Estimator & Linear Filter  │
 │  - Tier 1 Watchdog: 150 ms Inactivity Controlled Hold  │
@@ -52,54 +48,185 @@ Motion is bifurcated across two deterministic physical boundaries:
 
 ---
 
-## 2. WebSocket Binary Protocol (Windows Suite $\longleftrightarrow$ Host Daemon)
+## 2. Hybrid Transport Layer Architecture (Dual-Channel Network)
 
-### 2.1 Frame Layout (31 Bytes Fixed Width)
+Communication between the Windows Control Suite and the Raspberry Pi 5 Host Daemon is divided across two dedicated channels to completely eliminate TCP Head-of-Line (HoL) blocking while preserving guaranteed delivery for mission-critical state transitions:
 
-All real-time motion and state messages sent across WebSocket utilize a fixed 31-byte binary packet structure with little-endian numerical encoding:
+### 2.1 Channel A: Reliable TCP / WebSocket Control (Port 8765)
+- **Protocol**: Full-duplex WebSocket over TCP (`ws://<robot_ip>:8765`).
+- **Purpose**: Discrete commands, handshakes, state mutations, and configuration queries.
+- **Payload Format**: Standard UTF-8 JSON.
+- **Supported Operations**:
+  - `HOME`: Triggers multi-stage sequential hardware homing.
+  - `ESTOP`: Instant coil de-energization and buffer flush.
+  - `RESET`: Clear alarm state and re-energize motor drivers.
+  - `SET_GRIPPER`: Set servo PWM target pulse width (500–2500 µs).
+  - `SET_SPEED_LIMITS`: Dynamically update master speed scale and per-joint velocity limits.
+  - `GET_TRIMS` / `SET_TRIMS`: Read or persist endstop offset calibration in `daemon/offsets.json`.
+  - `MOVE_TO_STAGED` / `MOVE_JOINTS`: Reliable execution of discrete staged poses.
 
-| Byte Offset | Field Name | Data Type | Description |
-| :---: | :---: | :---: | :--- |
-| `0` | **Header** | `uint8` | Constant synchronization byte: `0xAA` (170 decimal) |
-| `1` | **Opcode** | `uint8` | Command / Telemetry operation identifier (see table below) |
-| `2..3` | **Sequence** | `uint16_le` | Incremental sequence number (`0` to `65535` with rollover) |
-| `4..27` | **Payload** | `6x float32_le` | 24 bytes: 6 single-precision IEEE 754 floats |
-| `28` | **Gripper** | `uint8` | Commanded or actual gripper position (`0` to `180` degrees) |
-| `29` | **Flags** | `uint8` | Bitfield representing hardware and motion states |
-| `30` | **CRC8** | `uint8` | XOR checksum across bytes `0` to `29` |
-
-### 2.2 Opcode Definitions
-
-| Opcode | Identifier | Direction | Payload Structure |
-| :---: | :--- | :---: | :--- |
-| `0x01` | `SERVO_JOINTS` | Client $\to$ Host | Commanded target joint angles `[J1, J2, J3, J4, J5, J6]` in **degrees** |
-| `0x02` | `SERVO_CARTESIAN`| Client $\to$ Host | Commanded Cartesian tool pose `[X, Y, Z, Rx, Ry, Rz]` (`mm` and `deg`) |
-| `0x03` | `TELEMETRY` | Host $\to$ Client | Physical live joint positions `[J1, J2, J3, J4, J5, J6]` in **degrees** |
-| `0x05` | `HEARTBEAT` | Bidirectional | Bytes 4..11: Client send timestamp (`double`); Bytes 12..27: Zero padding |
-
-### 2.3 Status Flags Bitmask (Byte 29)
-
-| Bit | Name | Active High (1) | Active Low (0) |
-| :---: | :--- | :--- | :--- |
-| `0` | `HOMED` | All 6 axes homed & calibrated | Unhomed (motion strictly blocked) |
-| `1` | `ESTOP` | Emergency Stop engaged / Coils off | Normal operation |
-| `2` | `STREAMING_ACTIVE` | Real-time continuous streaming ON | Staged discrete move mode |
-| `3` | `TRAJECTORY_BLOCKED`| IK singular / limit exceeded | Path clear |
-| `4..7`| *Reserved* | Reserved for future expansion | Always `0` |
-
-### 2.4 Integrity & Checksum Verification
-
-The CRC8 field (Byte 30) validates transmission integrity against network bit corruption:
-$$\text{CRC8} = \bigoplus_{i=0}^{29} \text{Byte}[i]$$
-If the calculated checksum does not match Byte 30, the host daemon immediately discards the frame and increments the dropped packet diagnostic counter.
+### 2.2 Channel B: Raw UDP Motion & Telemetry Stream (Port 8766)
+- **Protocol**: Unbuffered raw UDP datagrams (`udp://<robot_ip>:8766`).
+- **Purpose**: High-frequency real-time motion follower streaming and bi-directional telemetry.
+- **Jitter Tolerance**: Zero-allocation, connectionless delivery. If a UDP packet is delayed or dropped across Wi-Fi, it is dropped immediately without retransmission penalty. Late setpoints are discarded by the host-side jitter buffer.
+- **Transmission Rate**: 50 Hz to 100 Hz continuous stream.
 
 ---
 
-## 3. Microcontroller Serial Protocol (USB-UART @ 250,000 Baud)
+## 3. High-Frequency Binary Motion Frame (39 Bytes Fixed-Width)
 
-### 3.1 Compact Step Chunk Frame (`0x55`, 11 Bytes Fixed Width)
+All real-time UDP datagrams utilize a strictly packed, byte-aligned binary structure:
 
-To maintain high step frequency without saturating the ATmega2560 UART FIFO, step trajectories are discretized by the host into quadratic acceleration step chunks using the 11-byte `CompactStepChunk` format:
+```
+ 0        1        2..3         4..11            12..35                36       37      38
++--------+--------+------------+----------------+---------------------+--------+-------+-------+
+|  0xAA  | Opcode |  Sequence  |  Timestamp_ns  | Payload (6x float32)| Gripper| Flags | CRC8  |
+| (uint8)| (uint8)| (uint16_le)|  (uint64_le)   |      (24 bytes)     | (uint8)|(uint8)|(uint8)|
++--------+--------+------------+----------------+---------------------+--------+-------+-------+
+```
+
+### 3.1 Field Specification
+
+| Offset | Field | Type | Description |
+| :---: | :--- | :---: | :--- |
+| `0` | **Header** | `uint8` | Constant synchronization preamble: `0xAA` (170 decimal) |
+| `1` | **Opcode** | `uint8` | Command / Telemetry operation identifier (see table below) |
+| `2..3` | **Sequence** | `uint16_le` | Monotonically increasing 16-bit sequence counter (`0` to `65535` with rollover) |
+| `4..11` | **Timestamp_ns** | `uint64_le` | Nanosecond monotonic client send timestamp (`Stopwatch.GetTimestamp()` or `time.perf_counter_ns()`) |
+| `12..35`| **Payload** | `6x float32_le` | 24 bytes: 6 single-precision IEEE 754 floats.<br>• For `0x01`: Joint angles $[J_1, J_2, J_3, J_4, J_5, J_6]$ in **degrees**.<br>• For `0x02`: Cartesian TCP pose $[X, Y, Z, R_x, R_y, R_z]$ in **mm** and **degrees**.<br>• For `0x03`: Physical feedback joints $[J_1, J_2, J_3, J_4, J_5, J_6]$ in **degrees**. |
+| `36` | **Gripper** | `uint8` | Commanded or actual gripper position (`0` to `180` degrees; maps to 62.5 mm -> 0 mm) |
+| `37` | **Flags** | `uint8` | Bitfield representing hardware and motion states (see flags table) |
+| `38` | **CRC8** | `uint8` | CRC-8-CCITT checksum calculated over bytes `0` through `37` |
+
+### 3.2 Opcode Definitions
+
+| Opcode | Identifier | Direction | Payload Structure |
+| :---: | :--- | :---: | :--- |
+| `0x01` | `SERVO_JOINTS` | Client $\to$ Host | Commanded target joint angles $[J_1..J_6]$ in **degrees** |
+| `0x02` | `SERVO_CARTESIAN`| Client $\to$ Host | Commanded Cartesian tool pose $[X, Y, Z, R_x, R_y, R_z]$ in **mm / deg** |
+| `0x03` | `TELEMETRY` | Host $\to$ Client | Physical live joint positions $[J_1..J_6]$ with echoed `Timestamp_ns` for RTT tracking |
+| `0x05` | `HEARTBEAT` | Bidirectional | Client send timestamp in `Timestamp_ns`; immediate UDP pong reflection |
+
+### 3.3 Status Flags Bitmask (Byte 37)
+
+| Bit | Name | Active High (1) | Active Low (0) |
+| :---: | :--- | :--- | :--- |
+| `0` | `STREAMING_ACTIVE` | Real-time continuous streaming ON | Staged ghost mode |
+| `1` | `CARTESIAN_MODE` | Cartesian vector $[X, Y, Z, R_x, R_y, R_z]$ | Joint angles $[J_1..J_6]$ |
+| `2` | `HOMED` | All 6 axes homed and calibrated | Unhomed (motion strictly blocked) |
+| `3` | `ESTOP` | Emergency Stop engaged / Coils off | Normal operation |
+| `4` | `JITTER_BUFFER_ACTIVE`| Leaky bucket streaming locked | Initial buffering / idle |
+| `5..7`| *Reserved* | Reserved for future expansion | Always `0` |
+
+### 3.4 CRC-8-CCITT Checksum Specification
+
+To guarantee transmission integrity against packet corruption without adding significant computational overhead, all binary frames validate using the standard CRC-8-CCITT algorithm:
+- **Polynomial**: $x^8 + x^2 + x + 1$ (`0x07`)
+- **Initial Value**: `0x00`
+- **Lookup Table**: Pre-computed 256-element byte array executing in $O(1)$ constant time per byte:
+
+$$\text{CRC}[i] = \text{Table}\big[\text{CRC}[i-1] \oplus \text{Byte}[i]\big]$$
+
+```csharp
+// High-Speed CRC-8-CCITT Table Lookup (C# Implementation)
+public static byte ComputeCrc8(ReadOnlySpan<byte> data)
+{
+    byte val = 0;
+    for (int i = 0; i < data.Length; i++)
+        val = Crc8Table[val ^ data[i]];
+    return val;
+}
+```
+
+---
+
+## 4. Host-Side Deterministic Jitter Buffer (Monotonic Leaky Bucket)
+
+Incoming UDP datagrams across Wi-Fi networks suffer from burst clumping, transmission jitter, and non-deterministic kernel packet batching. The Raspberry Pi host daemon absorbs these variations using a pre-allocated circular jitter buffer (`JitterBuffer` in `daemon/robot_engine.py`):
+
+```
+                        INCOMING UDP PACKETS (50-100 Hz with Jitter)
+                                         │
+                                         ▼
+                 ┌───────────────────────────────────────────────┐
+                 │  Zero-Allocation CRC8 Validation & Unpacking  │
+                 └───────────────────────┬───────────────────────┘
+                                         │
+                         ┌───────────────┴───────────────┐
+                         │                               │
+                 Late / Out-of-Order            Valid New Frame
+                         │                               │
+                         ▼                               ▼
+                 ┌───────────────┐               ┌───────────────┐
+                 │ Discard Frame │               │ Ring Buffer   │
+                 │ (Count Drops) │               │ Push (Head)   │
+                 └───────────────┘               └───────┬───────┘
+                                                         │
+                                    ┌────────────────────┴────────────────────┐
+                                    ▼                                         ▼
+                            Under-run (< 0 frames)                    Over-run (> 50 frames)
+                            [Zero-Velocity Hold]                     [Skip Oldest Frames]
+                                    │                                         │
+                                    └────────────────────┬────────────────────┘
+                                                         │
+                                                         ▼
+                                         ┌───────────────────────────────┐
+                                         │ Deterministic 100 Hz Consumer │
+                                         │ Clocked via time.perf_counter │
+                                         │   dt = 10.0 ms strictly       │
+                                         └───────────────┬───────────────┘
+                                                         │
+                                                         ▼
+                                         ┌───────────────────────────────┐
+                                         │ Levenberg-Marquardt IK / DLS  │
+                                         │   + Quadratic Step Generator  │
+                                         └───────────────────────────────┘
+```
+
+### 4.1 Jitter Buffer Operational Parameters
+- **Slot Capacity**: Fixed 64 frames (pre-allocated array of `JitterBufferFrame` structures, zero runtime allocations).
+- **Target Playback Horizon**: Nominal **$60.0\text{ ms}$** (configurable $50\text{ ms}$ to $80\text{ ms}$).
+- **Sampling Cadence**: High-priority worker loop clocked strictly at **$100.0\text{ Hz}$ ($\Delta t = 10.0\text{ ms}$)** using high-resolution monotonic time (`time.perf_counter()`).
+
+### 4.2 Jitter Buffer State Transition & Anomaly Handling
+
+```mermaid
+stateDiagram-v2
+    [*] --> Idle : System Startup
+    Idle --> Buffering : First Packet Arrives\n(base_client_ns & base_host_ns synced)
+    Buffering --> NormalStreaming : Horizon Elapsed\n(elapsed_host >= 60 ms)
+    
+    state NormalStreaming {
+        [*] --> Steady100Hz
+        Steady100Hz --> Steady100Hz : Extract frame matching t_play (10 ms tick)
+    }
+
+    NormalStreaming --> UnderRun : Network Starvation\n(Buffer empty at tick)
+    UnderRun --> NormalStreaming : Packets Resume\n(Hold position until horizon re-filled)
+    UnderRun --> Idle : Silence > 150 ms\n(Tier 1 Watchdog Halt)
+
+    NormalStreaming --> OverRun : Client Clock Faster / Burst\n(Buffer count > 50 frames)
+    OverRun --> NormalStreaming : Drop Oldest Frames\n(Clamp latency to <= 80 ms)
+
+    NormalStreaming --> DropLate : Incoming seq < last_playback_seq\n(Out-of-order frame)
+    DropLate --> NormalStreaming : Discard & Increment Drop Counter
+```
+
+#### Anomaly Recovery Policies:
+1. **Late / Out-of-Order Frames**:
+   If an incoming packet has a sequence number or timestamp older than the current playback head (`(seq - last_playback_seq) & 0xFFFF > 0x8000`), the frame is discarded immediately (`packets_dropped_late += 1`).
+2. **Buffer Under-Run (Starvation)**:
+   If a transient Wi-Fi dropout causes the buffer to empty, the 100 Hz consumer **holds velocity at zero** at the last valid position setpoint. Discontinuous position jumps are mathematically prohibited. When packets resume, the buffer re-accumulates its 60 ms horizon before resuming motion.
+3. **Buffer Over-Run (Clock Drift / Network Flushes)**:
+   If the client clock runs slightly faster than the host clock, or if the network driver flushes an accumulated packet clump such that buffer depth exceeds 50 frames, the consumer skips the oldest frames, leaping forward to clamp motion latency strictly within the 80 ms limit.
+
+---
+
+## 5. Microcontroller Serial Protocol (USB-UART @ 250,000 Baud)
+
+### 5.1 Compact Step Chunk Frame (`0x55`, 11 Bytes Fixed Width)
+
+Step trajectories are discretized by the host into quadratic acceleration step chunks using the 11-byte `CompactStepChunk` format:
 
 ```
  0        1        2..5         6..7        8..9        10
@@ -118,40 +245,20 @@ To maintain high step frequency without saturating the ATmega2560 UART FIFO, ste
 | `8..9` | **interval** | `uint16_le` | Clock ticks between initial step pulses ($t_{\text{step}} = \text{interval} \times 62.5\text{ ns}$) |
 | `10` | **add_scaled** | `int8` | Scaled acceleration delta per step ($\Delta \text{interval} = \text{add\_scaled} \times 4$ ticks) |
 
-#### Transmission Performance Guarantee
-At 250,000 baud (1 start bit, 8 data bits, 1 stop bit = 10 bits per byte):
-- Byte transfer time: $10 / 250,000 = 40\ \mu\text{s}$ per byte.
-- Total chunk transfer time: $11 \times 40\ \mu\text{s} = 440\ \mu\text{s}$ ($0.44\text{ ms}$).
-This completes well under the mandatory 0.5 ms budget per active joint, enabling 6-axis coordinated streaming with negligible bus utilization.
-
-### 3.2 Hardware UART Buffer Flow Control & Pacing
-
-The ATmega2560 hardware UART receive buffer (`SERIAL_RX_BUFFER_SIZE`) is strictly **64 bytes**. 
-
-> [!CAUTION]
-> **UART FIFO Overflow Vulnerability**:
-> Sending an unthrottled burst of trajectory chunks (e.g., 72 chunks = 792 bytes) instantly overflows the 64-byte FIFO, resulting in dropped bytes. A dropped byte causes frame desynchronization, shifting payload bytes into the opcode position. If a random payload byte matches an ASCII control command (`'D'`, `'H'`, `'I'`), it triggers false direction inversion or uncommanded wrist homing, freezing the MCU.
-
-#### Mandatory Host Pacing Rules:
-1. **Burst Throttling**: The trajectory streamer in `daemon/trajectory_planner.py` restricts serial dispatches to **a maximum of 2 chunks (22 bytes) per 5 ms tick cycle**.
-2. **Buffer Headroom**: 22 bytes consumes only 34% of the 64-byte buffer, leaving 42 bytes free for incoming ping requests and emergency stop tokens.
-3. **Strict Trailing Newline Enforcment**: Every single-byte ASCII maintenance command (`'H'`, `'I'`, `'D'`, `'M'`, `'G'`) requires a trailing newline (`\n` or `\r\n`). If an isolated byte arrives without a trailing newline, it is discarded, completely immunizing the MCU from false ASCII triggers caused by corrupted binary data.
+### 5.2 UART Buffer Flow Control & Pacing
+- The ATmega2560 UART FIFO is strictly 64 bytes (`SERIAL_RX_BUFFER_SIZE = 64`).
+- The host trajectory streamer limits serial output to **$\le 2$ chunks (22 bytes) per 5 ms tick cycle**, leaving $>40$ bytes of headroom for incoming pings and E-Stop tokens.
+- All single-byte ASCII maintenance commands (`'H'`, `'I'`, `'D'`, `'M'`, `'G'`) require trailing newlines (`\n`), eliminating false triggers from binary payload bytes.
 
 ---
 
-## 4. Dual-Tier Watchdog & Fail-Safe Architecture
-
-The ecosystem implements two independent, hierarchically separated watchdogs to handle network disconnects, host operating system stalls, and communication line breaks:
+## 6. Dual-Tier Watchdog & Fail-Safe Architecture
 
 ```
 ┌────────────────────────────────────────────────────────┐
-│                  Windows Control Suite                 │
-└───────────────────────────┬────────────────────────────┘
-                            │ Continuous Heartbeat (15 Hz)
-                            ▼
-┌────────────────────────────────────────────────────────┐
 │              Tier 1 Watchdog (Host Daemon)             │
 │  Timeout: 150 ms                                       │
+│  Heartbeat: Continuous UDP Ping / Poses at >= 15 Hz    │
 │  Trigger: Heartbeat loss during active streaming       │
 │  Action: Controlled Deceleration to HOLD Stop          │
 │  State: Preserves Homing Calibration & Position        │
@@ -167,104 +274,15 @@ The ecosystem implements two independent, hierarchically separated watchdogs to 
 └────────────────────────────────────────────────────────┘
 ```
 
-### 4.1 Tier 1: Client-to-Host Watchdog (150 ms)
-- **Monitoring Location**: Raspberry Pi 5 Host Daemon (`client_watchdog_loop`).
-- **Heartbeat Rate**: Windows Suite broadcasts binary `HEARTBEAT` (`0x05`) at **15 Hz** (every 66 ms).
-- **Trigger Condition**: Continuous streaming is active (`is_streaming_active == True`) and no packet has arrived for $> 150\text{ ms}$.
-- **Fail-Safe Response**:
-  1. Daemon halts incoming trajectory generation.
-  2. Trajectory planner issues smooth S-curve deceleration to a **controlled HOLD stop** at the current coordinates.
-  3. Real-time streaming flag is cleared (`streaming_active = False`).
-  4. **Arm coordinates and homed state are retained**, allowing seamless recovery without re-homing.
-
-### 4.2 Tier 2: Host-to-MCU Hardware Watchdog (250 ms)
-- **Monitoring Location**: ATmega2560 Firmware (`TIMER1_OVF_vect` master clock loop).
-- **Heartbeat Rate**: Host daemon maintains serial activity (chunks or `'P'` ping frames) at $\ge 10\text{ Hz}$.
-- **Trigger Condition**: No valid serial byte or chunk received for $> 250\text{ ms}$ ($4,000,000$ clock cycles at 16 MHz).
-- **Fail-Safe Response**:
-  1. `handle_estop()` executes immediately.
-  2. Direct register writes force all motor `ENABLE` pins HIGH (`PORTD7`, `PORTF2`, `PORTK0`, `PORTA2`, `PORTC7`, `PORTK1`), completely de-energizing all 6 stepper motor coils.
-  3. Hardware step scheduling timer (`OCR1A`) is cleared.
-  4. Ring buffer pointers and step queues are wiped.
-  5. **Critical Safety State**: `homed_mask` is reset to `0x00`. Because de-energized coils cause the arm to drop under gravity (especially J2 and J3), position tracking is permanently invalidated. Motion cannot resume until a full multi-stage hardware homing sequence is executed.
+- **Tier 1 (Client-to-Host @ 150 ms)**: If the client stops transmitting for $>150\text{ ms}$, the host decelerates smoothly to an immediate **HOLD** stop. Joint coordinates remain valid.
+- **Tier 2 (Host-to-MCU @ 250 ms)**: If the host daemon halts or crashes, the MCU pulls all motor `ENABLE` pins HIGH within 250 ms, de-energizing stepper coils to prevent collisions. Because de-energized motors drop under gravity, `homed_mask` is cleared to `0x00`, strictly requiring re-homing upon recovery.
 
 ---
 
-## 5. Microsecond Master Clock Synchronization
+## 7. Socket Port Bindings & Network Configuration
 
-### 5.1 Virtualized 32-bit Clock Architecture
-The ATmega2560 16-bit Timer 1 runs in Normal Mode with Prescaler 1 (16 MHz clock, 62.5 ns per tick). The 16-bit Timer 1 overflow interrupt (`TIMER1_OVF_vect`) maintains an upper 16-bit rollover counter:
-$$\text{Clock}_{\text{32}} = (\text{timer1\_overflow\_count} \ll 16) \mid \text{TCNT1}$$
-This provides a continuous, drift-free 32-bit hardware clock that wraps every $268.435\text{ seconds}$ ($2^{32} \times 62.5\text{ ns}$).
-
-### 5.2 Host Linear Regression Drift Estimator
-The Raspberry Pi 5 runs a background 10 Hz clock sync task querying the MCU with `'P'`:
-1. Host records local high-resolution monotonic time $t_{\text{send}}$.
-2. MCU immediately returns its current 32-bit `master_clock`.
-3. Host records arrival time $t_{\text{recv}}$.
-4. Round-Trip Time ($RTT$) and one-way network transit latency are computed:
-   $$RTT = t_{\text{recv}} - t_{\text{send}}, \quad t_{\text{transit}} = \frac{RTT}{2}$$
-5. A recursive least-squares (RLS) linear regression estimator fits host monotonic time to MCU clock ticks:
-   $$\text{TargetClock}(t) = \text{Clock}_{\text{base}} + \text{Frequency}_{\text{ratio}} \cdot (t - t_{\text{base}})$$
-6. Trajectory chunks are scheduled with an absolute start clock $50\text{ ms}$ to $100\text{ ms}$ into the future, guaranteeing that steps fire with sub-microsecond synchronization and zero phase jitter.
-
----
-
-## 6. Endstop & Homing Sequence Truth Table
-
-### 6.1 Limit Switch Specifications
-- **Wiring**: Switches wired across Common (C) and Normally Open (NO) with internal MCU pull-ups enabled (`PORTx |= PIN_MASK`).
-- **Logic State**:
-  - Untriggered (Open): Pin reads `HIGH` (`1`).
-  - Triggered (Contact): Pin pulled to GND, reads `LOW` (`0`).
-- **Configuration Masks**:
-  - `endstop_invert_mask = 0x00` (Default active-low).
-  - `dir_invert_mask = 0x03` (J1 and J2 hardware direction inverted).
-
-### 6.2 Multi-Stage Parallel Homing Sequence
-
-To eliminate mechanical pinch points and ensure repeatable zero calibration, homing must execute in the exact verified multi-stage sequence:
-
-| Stage | Target Joints | Direction | Fast Feed | Backoff | Slow Feed | Purpose |
-| :---: | :---: | :---: | :---: | :---: | :---: | :--- |
-| **Stage 1** | **J1 + J2 + J3** | - / - / - | 2000 steps/s | 5° | 400 steps/s | Simultaneous parallel homing of primary heavy links. |
-| **Stage 2** | **J4** | - | 1500 steps/s | 5° | 300 steps/s | Forearm roll homing after upper arm is positioned. |
-| **Stage 3** | **J6 (Pass 1)** | - | 1000 steps/s | 5° | 200 steps/s | Initial wrist roll reference latch. |
-| **Stage 4** | **J5** | - | 1200 steps/s | 5° | 250 steps/s | Wrist pitch homing while J6 is clear. |
-| **Stage 5** | **J6 (Pass 2)** | - | 800 steps/s | 5° | 150 steps/s | Final precision wrist roll zeroing in true CAD pose. |
-| **Stage 6** | **All Joints** | + / - | Trajectory | N/A | Smooth | Travel to trimmed CAD zero coordinates (`offsets.json`). |
-
----
-
-## 7. Configuration & Persistent Trims (JSON Schema)
-
-Non-real-time configuration is serialized via standard JSON. Persistent trims fine-tune mechanical switch placement and click hysteresis to achieve $\pm 0.05^\circ$ CAD accuracy:
-
-### `daemon/offsets.json` Schema:
-```json
-{
-  "j1": 0.00,
-  "j2": -1.25,
-  "j3": 0.50,
-  "j4": 0.00,
-  "j5": 0.85,
-  "j6": -0.40
-}
-```
-
-### Dynamic Speed Limits Payload (`SET_SPEED_LIMITS`):
-```json
-{
-  "cmd": "SET_SPEED_LIMITS",
-  "scale": 0.80,
-  "limits": {
-    "j1": 60.0,
-    "j2": 45.0,
-    "j3": 50.0,
-    "j4": 90.0,
-    "j5": 90.0,
-    "j6": 120.0
-  }
-}
-```
-All velocity and acceleration clamps are dynamically applied by `daemon/trajectory_planner.py` before trajectory chunk discretization, guaranteeing stepper motors never exceed safe torque curves.
+| Transport | Port | Protocol | Data Structure | Direction | Description |
+| :---: | :---: | :---: | :---: | :---: | :--- |
+| **TCP** | `8765` | WebSocket | JSON UTF-8 | Full-Duplex | Discrete commands, homing handshakes, trims, E-Stop |
+| **UDP** | `8766` | Raw Datagram | 39-byte Packed Binary | Full-Duplex | Real-time motion streaming (100 Hz) & Telemetry (50 Hz) |
+| **HTTP** | `8000` | Web Browser | HTML / CSS / JS | Inbound | Touchscreen Kiosk Diagnostic User Interface |

@@ -60,6 +60,7 @@ logger = logging.getLogger("parol6_engine")
 DEFAULT_SERIAL_PORT = os.environ.get("PAROL6_SERIAL_PORT", "/dev/ttyACM0")
 SERIAL_BAUD = 250000
 WS_PORT = 8765
+UDP_PORT = 8766
 HTTP_PORT = 8000
 
 # Look-ahead buffering into MCU clock domain (80-120 ms)
@@ -67,6 +68,207 @@ LEAD_BUFFER_MS = 100.0
 LEAD_BUFFER_TICKS = int(LEAD_BUFFER_MS * (MCU_FREQ_HZ / 1000.0))  # 1,600,000 ticks @ 16 MHz
 STATUS_BROADCAST_INTERVAL_S = 0.05  # 20 Hz telemetry broadcast
 TRAJECTORY_SAMPLE_DT_S = 0.01       # 100 Hz fluent trajectory discretization window (10 ms)
+
+# ============================================================================
+# CRC-8-CCITT LOOKUP TABLE & CHECKSUM VERIFICATION
+# ============================================================================
+CRC8_POLY = 0x07
+CRC8_TABLE = []
+for i in range(256):
+    curr = i
+    for _ in range(8):
+        if curr & 0x80:
+            curr = ((curr << 1) ^ CRC8_POLY) & 0xFF
+        else:
+            curr = (curr << 1) & 0xFF
+    CRC8_TABLE.append(curr)
+
+def compute_crc8_ccitt(data: bytes) -> int:
+    """Compute CRC-8-CCITT (poly 0x07, init 0x00) using precomputed lookup table."""
+    val = 0
+    for b in data:
+        val = CRC8_TABLE[val ^ b]
+    return val
+
+def verify_crc(packet: bytes) -> bool:
+    """Verify packet checksum using CRC-8-CCITT with XOR fallback."""
+    if not packet or len(packet) < 2:
+        return False
+    expected = packet[-1]
+    body = packet[:-1]
+    if compute_crc8_ccitt(body) == expected:
+        return True
+    # Fallback XOR for backward compatibility
+    xor = 0
+    for b in body:
+        xor ^= b
+    return xor == expected
+
+# ============================================================================
+# DETERMINISTIC HOST-SIDE JITTER BUFFER (CIRCULAR LEAKY BUCKET)
+# ============================================================================
+class JitterBufferFrame:
+    """Pre-allocated circular buffer slot (zero runtime heap allocations)."""
+    __slots__ = ('valid', 'seq', 'timestamp_ns', 'opcode', 'payload', 'gripper', 'flags', 'recv_mono_ns')
+    def __init__(self):
+        self.valid = False
+        self.seq = 0
+        self.timestamp_ns = 0
+        self.opcode = 0
+        self.payload = [0.0] * 6
+        self.gripper = 0
+        self.flags = 0
+        self.recv_mono_ns = 0
+
+class JitterBuffer:
+    """
+    Fixed-Capacity Circular Ring Buffer & Monotonic Leaky Bucket.
+    Absorbs network transmission jitter and temporal packet clumping across Wi-Fi.
+    Feeds the kinematics & stepping engine at a deterministic 100 Hz cadence with 50-80 ms target horizon.
+    """
+    def __init__(self, capacity: int = 64, target_horizon_ms: float = 60.0):
+        self.capacity = capacity
+        self.target_horizon_ns = int(target_horizon_ms * 1_000_000)
+        self.frames = [JitterBufferFrame() for _ in range(capacity)]
+        self.head = 0  # write slot
+        self.tail = 0  # read slot
+        self.count = 0
+        self.lock = threading.Lock()
+
+        # Horizon synchronization
+        self.is_active = False
+        self.base_client_ns = 0
+        self.base_host_ns = 0
+        self.last_playback_seq = -1
+        self.last_popped_payload = [0.0] * 6
+        self.has_popped = False
+
+        # Diagnostic metrics
+        self.packets_rx = 0
+        self.packets_dropped_late = 0
+        self.packets_dropped_overflow = 0
+        self.underrun_count = 0
+        self.overrun_count = 0
+        self.last_pop_time = 0.0
+
+    def push(self, seq: int, timestamp_ns: int, opcode: int, payload: List[float], gripper: int, flags: int) -> bool:
+        """Push an incoming motion frame into the jitter ring buffer. Zero runtime heap allocation."""
+        now_ns = time.perf_counter_ns()
+        with self.lock:
+            # Re-initialize horizon if stream was inactive or buffer starved for > 1.0s
+            if not self.is_active or (now_ns - self.base_host_ns > 1_000_000_000 and self.count == 0):
+                self.is_active = True
+                self.base_client_ns = timestamp_ns
+                self.base_host_ns = now_ns
+                self.head = 0
+                self.tail = 0
+                self.count = 0
+                self.last_playback_seq = -1
+
+            # Discard late or out-of-order packets if older than last playback sequence
+            if self.last_playback_seq >= 0:
+                seq_delta = (seq - self.last_playback_seq) & 0xFFFF
+                if seq_delta > 0x8000:  # Packet is older than playback head
+                    self.packets_dropped_late += 1
+                    return False
+
+            # If full, drop oldest frame to maintain bounded delay
+            if self.count >= self.capacity:
+                self.tail = (self.tail + 1) % self.capacity
+                self.count -= 1
+                self.packets_dropped_overflow += 1
+                self.overrun_count += 1
+
+            # Store in pre-allocated slot
+            f = self.frames[self.head]
+            f.valid = True
+            f.seq = seq
+            f.timestamp_ns = timestamp_ns
+            f.opcode = opcode
+            f.payload[0] = float(payload[0])
+            f.payload[1] = float(payload[1])
+            f.payload[2] = float(payload[2])
+            f.payload[3] = float(payload[3])
+            f.payload[4] = float(payload[4])
+            f.payload[5] = float(payload[5])
+            f.gripper = gripper
+            f.flags = flags
+            f.recv_mono_ns = now_ns
+
+            self.head = (self.head + 1) % self.capacity
+            self.count += 1
+            self.packets_rx += 1
+            return True
+
+    def pop(self) -> Optional[JitterBufferFrame]:
+        """
+        Deterministic 100 Hz extraction: Returns the frame matching the current playback horizon,
+        or None if starving / waiting for initial buffering horizon.
+        """
+        now_ns = time.perf_counter_ns()
+        with self.lock:
+            if not self.is_active or self.count == 0:
+                if self.is_active and self.has_popped:
+                    self.underrun_count += 1
+                return None
+
+            elapsed_host_ns = now_ns - self.base_host_ns
+            # Wait until initial target horizon buffer is accumulated (e.g. 60 ms)
+            if elapsed_host_ns < self.target_horizon_ns:
+                return None
+
+            # Target playback client timestamp
+            target_playback_ns = self.base_client_ns + (elapsed_host_ns - self.target_horizon_ns)
+
+            # Pop frames from tail; skip any frames that are older than target_playback_ns - 25 ms
+            frame_to_return = None
+            while self.count > 0:
+                f = self.frames[self.tail]
+                self.tail = (self.tail + 1) % self.capacity
+                self.count -= 1
+
+                # If buffer is getting too deep (> 50 frames), fast-forward to maintain <= 80 ms latency
+                if self.count > 50:
+                    self.overrun_count += 1
+                    continue
+
+                frame_to_return = f
+                # If this frame's timestamp is reasonably close to or ahead of target playback, use it
+                if f.timestamp_ns >= target_playback_ns:
+                    break
+
+            if frame_to_return is not None:
+                self.last_playback_seq = frame_to_return.seq
+                self.last_popped_payload = list(frame_to_return.payload)
+                self.has_popped = True
+                self.last_pop_time = now_ns
+                return frame_to_return
+            else:
+                self.underrun_count += 1
+                return None
+
+# ============================================================================
+# ASYNC UDP MOTION PROTOCOL
+# ============================================================================
+class UdpMotionProtocol(asyncio.DatagramProtocol):
+    """Zero-allocation asyncio UDP datagram protocol for real-time motion & telemetry."""
+    def __init__(self, engine: RobotEngine):
+        self.engine = engine
+        self.transport: Optional[asyncio.DatagramTransport] = None
+
+    def connection_made(self, transport: asyncio.DatagramTransport):
+        self.transport = transport
+        self.engine.udp_transport = transport
+        logger.info("UDP Motion Server bound and active on 0.0.0.0:%d", UDP_PORT)
+
+    def datagram_received(self, data: bytes, addr: Tuple[str, int]):
+        self.engine.handle_udp_packet(data, addr)
+
+    def error_received(self, exc: Exception):
+        logger.warning("UDP error received: %s", exc)
+
+    def connection_lost(self, exc: Optional[Exception]):
+        logger.info("UDP transport closed: %s", exc)
 
 
 class RobotEngine:
@@ -127,6 +329,12 @@ class RobotEngine:
 
         # Connected WebSocket clients
         self.connected_ws_clients: Set[websockets.WebSocketServerProtocol] = set()
+
+        # Hybrid Transport (UDP Stream + Jitter Buffer)
+        self.udp_transport: Optional[asyncio.DatagramTransport] = None
+        self.client_udp_endpoint: Optional[Tuple[str, int]] = None
+        self.jitter_buffer = JitterBuffer(capacity=64, target_horizon_ms=60.0)
+        self.last_client_timestamp_ns: int = 0
 
         # Start serial listener worker thread
         self.serial_thread = threading.Thread(target=self._serial_worker_thread, daemon=True)
@@ -755,6 +963,140 @@ class RobotEngine:
 
         return await self.execute_joint_move(ik_res.joints_deg, speed_factor=speed_factor)
 
+    async def servo_to_cartesian(self, target_pose: List[float], dt: float = 0.05) -> bool:
+        """
+        Solve Levenberg-Marquardt / DLS Inverse Kinematics for high-frequency Cartesian streaming,
+        then route through servo_to_joints.
+        """
+        if not self.homed:
+            return False
+        seed = self.target_joints_deg if self.state == "MOVING" else self.joints_deg
+        ik_res = self.kinematics.solve_ik(target_pose, seed_joints_deg=seed)
+        if not ik_res.success:
+            logger.debug("Cartesian streaming IK failure: %s", ik_res.message)
+            return False
+        return await self.servo_to_joints(ik_res.joints_deg, dt=dt)
+
+    # =========================================================================
+    # HYBRID UDP STREAMING & JITTER BUFFER SAMPLING
+    # =========================================================================
+
+    def handle_udp_packet(self, data: bytes, addr: Tuple[str, int]):
+        """
+        Zero-allocation deserializer for high-frequency UDP motion frames (Port 8766).
+        Extracts 39-byte (or 31-byte / 32-byte) binary frame, validates CRC8,
+        and pushes setpoint into the deterministic circular jitter buffer.
+        """
+        length = len(data)
+        if length < 31 or data[0] != 0xAA:
+            return
+        if not verify_crc(data):
+            return
+
+        self.client_udp_endpoint = addr
+
+        try:
+            if length == 39:
+                header, opcode, seq, ts_ns, j1, j2, j3, j4, j5, j6, gripper, flags = struct.unpack_from("<BBHQ6fBBB", data)
+            elif length == 31:
+                header, opcode, seq, j1, j2, j3, j4, j5, j6, gripper, flags = struct.unpack_from("<BBH6fBBB", data)
+                ts_ns = time.perf_counter_ns()
+            elif length == 32:
+                header, opcode, seq, ts_32, j1, j2, j3, j4, j5, j6, gripper, flags = struct.unpack_from("<BBHI6fBB", data)
+                ts_ns = int(ts_32) * 1_000_000
+            else:
+                return
+        except struct.error:
+            return
+
+        self.last_client_heartbeat = time.monotonic()
+        self.last_client_timestamp_ns = ts_ns
+
+        if opcode == 0x01:  # MOVE_JOINTS (Joint angles)
+            if self.homed and self.state != "ESTOP":
+                self.jitter_buffer.push(seq, ts_ns, opcode, [j1, j2, j3, j4, j5, j6], gripper, flags)
+        elif opcode == 0x02:  # MOVE_CARTESIAN (Cartesian pose)
+            if self.homed and self.state != "ESTOP":
+                self.jitter_buffer.push(seq, ts_ns, opcode, [j1, j2, j3, j4, j5, j6], gripper, flags)
+        elif opcode == 0x05:  # HEARTBEAT
+            self.send_udp_heartbeat_reply(seq, ts_ns, addr)
+
+    def send_udp_heartbeat_reply(self, seq: int, client_ts_ns: int, addr: Tuple[str, int]):
+        """Immediate UDP pong echoing client Timestamp_ns for RTT measurement."""
+        if not self.udp_transport:
+            return
+        mcu_clk = self.last_mcu_clock
+        body = struct.pack(
+            "<BBHQ6fBB",
+            0xAA, 0x05, seq, client_ts_ns,
+            float(mcu_clk & 0xFFFF), float((mcu_clk >> 16) & 0xFFFF),
+            float(self.clock_sync.last_rtt_ms), 0.0, 0.0, 0.0,
+            int(min(180, max(0, self.gripper_mm * 2.88))), 0
+        )
+        crc = compute_crc8_ccitt(body)
+        self.udp_transport.sendto(body + bytes([crc]), addr)
+
+    async def jitter_buffer_worker(self):
+        """
+        High-priority deterministic 100 Hz (10.0 ms) motion extraction loop.
+        Pulls smoothed setpoints from the circular jitter buffer and passes them
+        at mathematically uniform time intervals to the kinematics & stepping engine.
+        """
+        loop = asyncio.get_running_loop()
+        period = 0.010  # 10.0 ms strictly
+        next_tick = loop.time()
+
+        while self.running:
+            next_tick += period
+            frame = self.jitter_buffer.pop()
+            if frame is not None and self.homed and self.state != "ESTOP":
+                try:
+                    if frame.opcode == 0x01:
+                        await self.servo_to_joints(frame.payload, dt=0.010)
+                    elif frame.opcode == 0x02:
+                        await self.servo_to_cartesian(frame.payload, dt=0.010)
+                except Exception as e:
+                    logger.debug("Jitter buffer dispatch error: %s", e)
+
+            sleep_duration = next_tick - loop.time()
+            if sleep_duration > 0:
+                await asyncio.sleep(sleep_duration)
+            else:
+                next_tick = loop.time()
+                await asyncio.sleep(0.001)
+
+    async def udp_telemetry_loop(self):
+        """
+        Dedicated 50 Hz UDP Telemetry broadcast.
+        Transmits packed 39-byte binary telemetry frames to the active client UDP endpoint.
+        """
+        while self.running:
+            try:
+                if self.udp_transport and self.client_udp_endpoint:
+                    joints = self.joints_deg
+                    flags = 0
+                    if self.state == "ESTOP": flags |= 0x01
+                    if self.state == "HOMING": flags |= 0x02
+                    if self.state == "MOVING": flags |= 0x04
+                    if self.homed: flags |= 0x08
+                    if self.jitter_buffer.is_active: flags |= 0x10
+
+                    body = struct.pack(
+                        "<BBHQ6fBB",
+                        0xAA, 0x03, self.telemetry_seq,
+                        self.last_client_timestamp_ns,  # Reflected timestamp for continuous client RTT & jitter tracking
+                        float(joints[0]), float(joints[1]), float(joints[2]),
+                        float(joints[3]), float(joints[4]), float(joints[5]),
+                        int(round(min(180, max(0, self.gripper_mm * 2.88)))),
+                        flags
+                    )
+                    crc = compute_crc8_ccitt(body)
+                    self.udp_transport.sendto(body + bytes([crc]), self.client_udp_endpoint)
+                    self.telemetry_seq = (self.telemetry_seq + 1) & 0xFFFF
+            except Exception as e:
+                logger.debug("UDP telemetry broadcast error: %s", e)
+            await asyncio.sleep(0.02)  # 50 Hz = 20 ms
+
     async def stream_pending_chunks(self):
         """
         Transmit pending step chunks to MCU using 11-byte CompactStepChunk frames.
@@ -837,6 +1179,10 @@ class RobotEngine:
             "stream_active": not stream_idle,
             "stream_packets": self.stream_packet_count,
             "homing_trims_deg": dict(self.homing_trims_deg),
+            "jitter_depth": self.jitter_buffer.count,
+            "jitter_underruns": self.jitter_buffer.underrun_count,
+            "jitter_overruns": self.jitter_buffer.overrun_count,
+            "jitter_dropped_late": self.jitter_buffer.packets_dropped_late,
         }
 
     async def broadcast_telemetry(self):
@@ -1276,21 +1622,32 @@ class RobotEngine:
         """Main asynchronous event loop executing all servers and control loops."""
         logger.info("Initializing PAROL6 Engine Servers...")
 
-        # 1. Start WebSocket Server
+        # 1. Start WebSocket Server (Reliable Control & Handshakes - Port 8765)
         ws_server = await websockets.serve(self.ws_handler, "0.0.0.0", WS_PORT)
-        logger.info("WebSocket Server active on ws://0.0.0.0:%d", WS_PORT)
+        logger.info("WebSocket Control Server active on ws://0.0.0.0:%d", WS_PORT)
 
-        # 2. Start HTTP Kiosk Server
+        # 2. Start Raw UDP Motion Server (High-Frequency Real-Time Streaming - Port 8766)
+        loop = asyncio.get_running_loop()
+        udp_transport, udp_protocol = await loop.create_datagram_endpoint(
+            lambda: UdpMotionProtocol(self),
+            local_addr=("0.0.0.0", UDP_PORT)
+        )
+        self.udp_transport = udp_transport
+        logger.info("Raw UDP Motion Streamer active on 0.0.0.0:%d", UDP_PORT)
+
+        # 3. Start HTTP Kiosk Server (Port 8000)
         http_server = await asyncio.start_server(self.handle_http_client, "0.0.0.0", HTTP_PORT)
         logger.info("Touchscreen HTTP Kiosk Server active on http://0.0.0.0:%d", HTTP_PORT)
 
-        # 3. Launch background tasks
+        # 4. Launch background tasks
         tasks = [
             asyncio.create_task(self.ping_loop()),
             asyncio.create_task(self.query_status_loop()),
             asyncio.create_task(self.broadcast_telemetry()),
             asyncio.create_task(self.chunk_pump_loop()),
             asyncio.create_task(self.client_watchdog_loop()),
+            asyncio.create_task(self.jitter_buffer_worker()),
+            asyncio.create_task(self.udp_telemetry_loop()),
         ]
 
         logger.info("All engine systems operational. Ready for commands.")
@@ -1299,6 +1656,8 @@ class RobotEngine:
         except asyncio.CancelledError:
             pass
         finally:
+            if self.udp_transport:
+                self.udp_transport.close()
             ws_server.close()
             await ws_server.wait_closed()
             http_server.close()
