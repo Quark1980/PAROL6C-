@@ -286,3 +286,43 @@ Step trajectories are discretized by the host into quadratic acceleration step c
 | **TCP** | `8765` | WebSocket | JSON UTF-8 | Full-Duplex | Discrete commands, homing handshakes, trims, E-Stop |
 | **UDP** | `8766` | Raw Datagram | 39-byte Packed Binary | Full-Duplex | Real-time motion streaming (100 Hz) & Telemetry (50 Hz) |
 | **HTTP** | `8000` | Web Browser | HTML / CSS / JS | Inbound | Touchscreen Kiosk Diagnostic User Interface |
+
+---
+
+## 8. Teleoperation Filtering & Step Timing Protection
+
+### 8.1 Ingestion & Outlier Gate (Velocity Sanity Check)
+To protect physical stepper motors and reduction gearboxes from instantaneous target steps, mouse slips, multi-monitor dragging jumps, or IK numerical singularities, all streaming joint setpoints are passed through a velocity sanity gate before step synthesis:
+
+$$\omega_i = \frac{\theta_{\text{incoming}, i} - \theta_{\text{filtered}, i}}{\Delta t}$$
+
+If $|\omega_i| > \omega_{\text{limit}, i}$, the discontinuous jump is clamped to the maximum permissible rotational velocity for that specific axis:
+
+$$\theta_{\text{target}, i} = \theta_{\text{filtered}, i} + \text{sign}(\Delta \theta_i) \cdot \omega_{\text{limit}, i} \cdot \Delta t$$
+
+Default physical joint velocity limits ($\omega_{\text{limit}}$):
+- Joint 1 (Base): $60.0^\circ/\text{s}$
+- Joint 2 (Shoulder): $30.0^\circ/\text{s}$
+- Joint 3 (Elbow): $30.0^\circ/\text{s}$
+- Joint 4 (Forearm Roll): $40.0^\circ/\text{s}$
+- Joint 5 (Wrist Pitch): $40.0^\circ/\text{s}$
+- Joint 6 (Wrist Roll): $60.0^\circ/\text{s}$
+
+### 8.2 Overdue Step Pacing & 100 kHz Peak Pulse Ceiling
+If a step chunk arrives late due to network jitter or UART queuing, `c->first_step_clock` may lie in the MCU hardware past (`first_step_clock < now`). 
+To prevent runaway 500 kHz interrupt bursts that cause motor stall and ISR starvation:
+1. **Pacing Overdue Chunks**: When promoting or popping an overdue chunk, the MCU paces the first step from the current clock:
+   $$\text{next\_step\_clock} = \text{now} + \text{interval}$$
+2. **Rescheduler Minimum Delay**: The compare match rescheduler enforces a minimum floor of 160 ticks ($10.0\ \mu\text{s}$):
+   $$\text{OCR1A} = \text{TCNT1} + 160$$
+   This caps peak step frequency at 100 kHz per axis and guarantees foreground serial loop execution.
+
+### 8.3 Follow-Mode Teleoperation 1-Euro Filter Architecture
+For smooth interactive 3D twin teleoperation without hand tremors or cursor noise, an adaptive 6-axis 1-Euro filter conditions target angles:
+- **Low-Speed Cutoff ($f_{c,\text{min}} = 1.0\text{ Hz}$)**: Suppresses sub-pixel mouse hum and micro-tremors during static positioning.
+- **Velocity Adaptation Factor ($\beta = 0.05$)**: Dynamically widens cutoff bandwidth during brisk movements to minimize tracking lag.
+- **Derivative Cutoff ($f_{c,\text{deriv}} = 1.0\text{ Hz}$)**: Smooths derivative spikes during rapid directional reversals.
+
+Mathematical formulation:
+$$\alpha = \frac{1}{1 + \frac{\tau}{\Delta t}}, \quad \tau = \frac{1}{2\pi f_c}, \quad f_c = f_{c,\text{min}} + \beta \cdot |\dot{\theta}|$$
+

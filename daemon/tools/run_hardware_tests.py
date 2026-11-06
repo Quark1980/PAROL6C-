@@ -498,7 +498,21 @@ async def _async_test_estop() -> Dict[str, Any]:
             await asyncio.sleep(0.05)
             # Query status
             await ws.send(json.dumps({"cmd": "GET_TELEMETRY"}))
-            final_data = await recv_json_msg(ws, timeout=1.0)
+            
+            final_data = {}
+            t_deadline = time.perf_counter() + 2.0
+            while time.perf_counter() < t_deadline:
+                rem = max(0.01, t_deadline - time.perf_counter())
+                try:
+                    raw = await asyncio.wait_for(ws.recv(), timeout=rem)
+                    if isinstance(raw, bytes):
+                        continue
+                    msg = json.loads(raw)
+                    if "state" in msg:
+                        final_data = msg
+                        break
+                except Exception:
+                    pass
 
             res["state_post_estop"] = final_data.get("state", "")
             res["queue_depth_post_estop"] = sum(final_data.get("free_slots", [16] * 6))

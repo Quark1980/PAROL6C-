@@ -830,7 +830,17 @@ class RobotEngine:
 
         async with self.streaming_lock:
             for j in range(6):
-                delta_deg = clamped_targets[j] - ref_joints[j]
+                raw_delta_deg = clamped_targets[j] - ref_joints[j]
+
+                # Ingestion & Outlier Gate: enforce joint speed limit per axis
+                max_joint_speed = self.planner.joint_speeds[j] * self.speed_scale
+                max_delta_deg = max_joint_speed * dt_clamped
+                if abs(raw_delta_deg) > max_delta_deg:
+                    delta_deg = math.copysign(max_delta_deg, raw_delta_deg)
+                else:
+                    delta_deg = raw_delta_deg
+
+                clamped_targets[j] = round(ref_joints[j] + delta_deg, 3)
                 steps = int(round(delta_deg * STEPS_PER_DEG[j]))
                 if steps == 0:
                     continue
@@ -844,10 +854,14 @@ class RobotEngine:
                 if signed_lead > 0x80000000:
                     signed_lead -= 0x100000000
 
-                if end_clock == 0 or signed_lead < LEAD_BUFFER_TICKS:
-                    # Initialize look-ahead lead buffer (100 ms in future)
+                if end_clock == 0 or signed_lead <= 0:
+                    # Buffer starved or reset: initialize lead buffer (100 ms in future)
+                    start_clock = (now_mcu + LEAD_BUFFER_TICKS) & 0xFFFFFFFF
+                elif signed_lead > (LEAD_BUFFER_TICKS * 3):
+                    # Excess latency buildup (>300 ms): resynchronize
                     start_clock = (now_mcu + LEAD_BUFFER_TICKS) & 0xFFFFFFFF
                 else:
+                    # Seamlessly chain to end of previous chunk!
                     start_clock = end_clock
 
                 # Step distribution over duration dt
@@ -918,19 +932,43 @@ class RobotEngine:
             return False
 
         clamped = self.kinematics.clamp_joints(target_joints_deg)
-        duration, profiles = self.planner.plan_synchronized_move(
-            q_start_deg=self.joints_deg,
-            q_target_deg=clamped,
-            speed_factor=speed_factor,
-        )
-
-        if duration <= 1e-4:
-            return True
-
-        now_mcu = self.get_estimated_mcu_clock()
-        start_clock = (now_mcu + LEAD_BUFFER_TICKS) & 0xFFFFFFFF
 
         async with self.streaming_lock:
+            now_mcu = self.get_estimated_mcu_clock()
+            max_lead = 0
+            latest_end_clock = 0
+            for j in range(6):
+                ec = self.joint_stream_end_clock[j]
+                if ec != 0:
+                    lead = (int(ec) - int(now_mcu)) & 0xFFFFFFFF
+                    if lead > 0x80000000:
+                        lead -= 0x100000000
+                    if lead > max_lead:
+                        max_lead = lead
+                        latest_end_clock = ec
+
+            # Limit queue backlog: if more than 1.5 seconds of motion is queued, throttle
+            if max_lead > int(MCU_FREQ_HZ * 1.5):
+                logger.info(f"Throttling rapid move command: motion queue horizon {max_lead/MCU_FREQ_HZ:.2f}s ahead")
+                return False
+
+            if max_lead > 0 and latest_end_clock != 0:
+                # Chain seamlessly onto the end of currently scheduled chunks
+                start_clock = latest_end_clock
+                q_start = list(self.target_joints_deg)
+            else:
+                start_clock = (now_mcu + LEAD_BUFFER_TICKS) & 0xFFFFFFFF
+                q_start = list(self.joints_deg)
+
+            duration, profiles = self.planner.plan_synchronized_move(
+                q_start_deg=q_start,
+                q_target_deg=clamped,
+                speed_factor=speed_factor,
+            )
+
+            if duration <= 1e-4:
+                return True
+
             for j in range(6):
                 p = profiles[j]
                 if p is not None:
@@ -956,7 +994,8 @@ class RobotEngine:
             logger.warning("Cartesian move rejected: Robot must be homed first!")
             return False
 
-        ik_res = self.kinematics.solve_ik(target_pose, seed_joints_deg=self.joints_deg)
+        seed = self.target_joints_deg if self.state == "MOVING" else self.joints_deg
+        ik_res = self.kinematics.solve_ik(target_pose, seed_joints_deg=seed)
         if not ik_res.success:
             logger.warning("IK Failed for Cartesian target %s: %s", target_pose, ik_res.message)
             return False
@@ -1235,13 +1274,13 @@ class RobotEngine:
     async def client_watchdog_loop(self):
         """
         Tier 1 Watchdog (Windows Client <-> Pi Host):
-        If no heartbeat (Opcode 0x05) or streaming frame is received for >150 ms during active motion,
+        If no heartbeat (Opcode 0x05) or streaming frame is received for >150 ms during active streaming,
         automatically execute a controlled, smooth deceleration ramp to zero (controlled HOLD).
         """
         while self.running:
-            if self.state == "MOVING" and (time.monotonic() - self.last_client_heartbeat > 0.150):
+            if self.state == "MOVING" and self.jitter_buffer.is_active and (time.monotonic() - self.last_client_heartbeat > 0.150):
                 if any(len(q) > 0 for q in self.pending_chunks):
-                    logger.warning("Tier 1 Watchdog tripped: Client heartbeat lost for >150 ms during motion! Halting.")
+                    logger.warning("Tier 1 Watchdog tripped: Client heartbeat lost for >150 ms during active streaming! Halting.")
                     async with self.streaming_lock:
                         for q in self.pending_chunks:
                             q.clear()
@@ -1292,6 +1331,7 @@ class RobotEngine:
 
                 try:
                     payload = json.loads(message)
+                    self.last_client_heartbeat = time.monotonic()
                 except Exception:
                     continue
 
@@ -1382,22 +1422,13 @@ class RobotEngine:
                         }))
                         continue
 
-                    if self.state == "MOVING" or any(len(q) > 0 for q in self.pending_chunks):
-                        await websocket.send(json.dumps({
-                            "type": "ACK",
-                            "cmd": cmd,
-                            "status": "BUSY",
-                            "msg": "Robot is currently moving. Please wait until idle."
-                        }))
-                        continue
-
                     joint_idx = int(payload.get("joint", 1)) - 1
                     delta = float(payload.get("delta_deg", 0.0))
                     speed = float(payload.get("speed", 0.5))
                     if 0 <= joint_idx < 6:
-                        target = list(self.joints_deg)
-                        target[joint_idx] += delta
-                        clamped = self.kinematics.clamp_joints(target)
+                        ref = list(self.target_joints_deg) if self.state == "MOVING" else list(self.joints_deg)
+                        ref[joint_idx] += delta
+                        clamped = self.kinematics.clamp_joints(ref)
                         asyncio.create_task(self.execute_joint_move(clamped, speed_factor=speed))
                         await websocket.send(json.dumps({"type": "ACK", "cmd": "JOG_JOINT", "status": "OK"}))
 
@@ -1408,15 +1439,6 @@ class RobotEngine:
                             "cmd": cmd,
                             "status": "REJECTED",
                             "msg": "Safety Interlock: Robot must be homed before moving joints"
-                        }))
-                        continue
-
-                    if self.state == "MOVING" or any(len(q) > 0 for q in self.pending_chunks):
-                        await websocket.send(json.dumps({
-                            "type": "ACK",
-                            "cmd": cmd,
-                            "status": "BUSY",
-                            "msg": "Robot is currently moving. Please wait until idle."
                         }))
                         continue
 
@@ -1435,20 +1457,12 @@ class RobotEngine:
                         }))
                         continue
 
-                    if self.state == "MOVING" or any(len(q) > 0 for q in self.pending_chunks):
-                        await websocket.send(json.dumps({
-                            "type": "ACK",
-                            "cmd": cmd,
-                            "status": "BUSY",
-                            "msg": "Robot is currently moving. Please wait until idle."
-                        }))
-                        continue
-
                     axis = payload.get("axis", "Z").upper()
                     delta = float(payload.get("delta", 0.0))
                     speed = float(payload.get("speed", 0.5))
-                    curr_pose = self.kinematics.fk_pose(self.joints_deg)
-                    axis_map = {"X": 0, "Y": 1, "Z": 2, "RX": 3, "RY": 4, "RZ": 5}
+                    ref_joints = list(self.target_joints_deg) if self.state == "MOVING" else list(self.joints_deg)
+                    curr_pose = self.kinematics.fk_pose(ref_joints)
+                    axis_map = {"X": 0, "Y": 1, "Z": 2, "RX": 3, "RY": 4, "RZ": 5, "ROLL": 3, "PITCH": 4, "YAW": 5}
                     if axis in axis_map:
                         curr_pose[axis_map[axis]] += delta
                         asyncio.create_task(self.execute_cartesian_move(curr_pose, speed_factor=speed))
@@ -1544,7 +1558,7 @@ class RobotEngine:
                         "trims": self.homing_trims_deg
                     }))
 
-                elif cmd == "GET_STATUS":
+                elif cmd in ("GET_STATUS", "GET_TELEMETRY", "TELEMETRY"):
                     await websocket.send(json.dumps(self.get_telemetry_dict()))
 
                 else:

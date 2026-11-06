@@ -40,12 +40,19 @@ void step_engine_reschedule(void) {
     uint8_t sreg = SREG;
     cli();
 
+    uint32_t now = get_master_clock();
+
     // 1. Promote pending chunks for any inactive joints
     for (uint8_t j = 0; j < NUM_JOINTS; j++) {
         if (!joints[j].active && joints[j].count > 0) {
             StepChunk* c = &joints[j].queue[joints[j].tail];
             joints[j].active = true;
-            joints[j].next_step_clock = c->first_step_clock;
+            // Overdue pace clamp: ensure chunk cannot fire in a runaway burst if arrived late
+            if ((int32_t)(now - c->first_step_clock) > 0) {
+                joints[j].next_step_clock = now + c->interval;
+            } else {
+                joints[j].next_step_clock = c->first_step_clock;
+            }
             joints[j].steps_left = c->step_count;
             joints[j].interval = c->interval;
             joints[j].add = c->add;
@@ -59,7 +66,6 @@ void step_engine_reschedule(void) {
     // 2. Find the earliest next_step_clock among all active joints
     bool any_active = false;
     uint32_t earliest_clock = 0;
-    uint32_t now = get_master_clock();
     int32_t min_diff = 0x7FFFFFFF;
 
     for (uint8_t j = 0; j < NUM_JOINTS; j++) {
@@ -80,9 +86,10 @@ void step_engine_reschedule(void) {
     }
 
     // 3. Set Compare Match OCR1A relative to Timer 1 counter
-    if (min_diff <= 32) {
-        // Step event is due immediately or overdue
-        OCR1A = TCNT1 + 32;
+    // Minimum 160 ticks = 10 us (100 kHz safety ceiling) to prevent ISR choking foreground serial loop
+    if (min_diff <= 160) {
+        // Step event is due immediately or overdue: pace by at least 160 ticks (10 us)
+        OCR1A = TCNT1 + 160;
     } else if (min_diff < 50000) {
         // Event lies within current 16-bit counter window
         OCR1A = (uint16_t)earliest_clock;
@@ -142,8 +149,12 @@ ISR(TIMER1_COMPA_vect) {
             joints[j].steps_left--;
 
             if (joints[j].steps_left > 0) {
-                // Next step in current chunk
-                joints[j].next_step_clock += joints[j].interval;
+                // Next step in current chunk: pace from now if overdue to prevent 500 kHz runaway
+                if ((int32_t)(now - joints[j].next_step_clock) > 0) {
+                    joints[j].next_step_clock = now + joints[j].interval;
+                } else {
+                    joints[j].next_step_clock += joints[j].interval;
+                }
                 int32_t next_iv = (int32_t)joints[j].interval + joints[j].add;
                 if (next_iv < MIN_STEP_INTERVAL) {
                     next_iv = MIN_STEP_INTERVAL;
@@ -153,7 +164,11 @@ ISR(TIMER1_COMPA_vect) {
                 // Chunk finished: pop next if queued
                 if (joints[j].count > 0) {
                     StepChunk* c = &joints[j].queue[joints[j].tail];
-                    joints[j].next_step_clock = c->first_step_clock;
+                    if ((int32_t)(now - c->first_step_clock) > 0) {
+                        joints[j].next_step_clock = now + c->interval;
+                    } else {
+                        joints[j].next_step_clock = c->first_step_clock;
+                    }
                     joints[j].steps_left = c->step_count;
                     joints[j].interval = c->interval;
                     joints[j].add = c->add;
