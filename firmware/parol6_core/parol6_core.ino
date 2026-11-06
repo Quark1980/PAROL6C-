@@ -131,11 +131,16 @@ static inline void handle_query_status(void) {
     for (uint8_t j = 0; j < NUM_JOINTS; j++) {
         positions[j] = step_engine_get_position(j);
     }
+    uint8_t free_slots[NUM_JOINTS];
+    for (uint8_t j = 0; j < NUM_JOINTS; j++) {
+        free_slots[j] = step_engine_free_slots(j);
+    }
     uint8_t endstops = read_all_endstops_mask();
 
     Serial.write('!');
     Serial.write(flags);
     Serial.write((const uint8_t*)positions, sizeof(positions)); // 24 bytes
+    Serial.write((const uint8_t*)free_slots, sizeof(free_slots)); // 6 bytes
     Serial.write(endstops);
     Serial.write((const uint8_t*)&clock_now, 4);
     Serial.write('\n');

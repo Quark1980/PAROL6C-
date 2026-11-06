@@ -246,9 +246,13 @@ Step trajectories are discretized by the host into quadratic acceleration step c
 | `10` | **add_scaled** | `int8` | Scaled acceleration delta per step ($\Delta \text{interval} = \text{add\_scaled}$ ticks) |
 | `11` | **CRC8** | `uint8` | XOR CRC-8 checksum over bytes 0 through 10 |
 
-### 5.2 UART Buffer Flow Control & Sliding-Window Resynchronization
+### 5.2 UART Buffer Flow Control & Burst-Fill Pacing
 - The ATmega2560 UART FIFO is strictly 64 bytes (`SERIAL_RX_BUFFER_SIZE = 64`).
-- **Pacing**: The host trajectory streamer limits serial output to **strictly 1 chunk (12 bytes) per iteration**, requiring `free_slots[j] > 4`, guaranteeing the 64-byte UART hardware buffer never exceeds 16 bytes of depth.
+- **Burst Fill & High-Water Mark Pacing**: The host trajectory streamer dispatches up to 4 step chunks (48 bytes max) per 5 ms tick across active joints having `free_slots >= 2`. Because 48 bytes fits within the 64-byte hardware FIFO, UART overflow is prevented while keeping the MCU ring buffer saturated (4 to 8 chunks deep, maintaining 60–100 ms of lookahead horizon at all times).
+- **In-Flight Chunk Horizon Tracking**: The host models MCU queue execution windows $[T_{\text{start}}, T_{\text{end}}]$ in the 16 MHz master clock domain. Chunks that have completed execution are retired dynamically based on estimated MCU clock ticks (`now_mcu`), continuously updating `free_slots[j] = 16 - len(in_flight_chunks[j])` without stalling when UART traffic is quiet.
+- **38-Byte Status Telemetry Frame**: When queried with `'?'\n`, the firmware emits a packed 38-byte status frame:
+  `[!] [flags: 1B] [positions: 24B] [free_slots: 6B] [endstops: 1B] [clock: 4B] [\n]`
+  providing real-time feedback of hardware ring buffer occupancy per joint.
 - **Sliding-Window Resync**: If a byte is dropped on the wire or a checksum mismatch occurs, the firmware scans for the next valid packet header (`0x55`, `'E'`, `'R'`, `'P'`, `'?'`, `'H'`, `'G'`, `'M'`) and uses `memmove` to realign the buffer window immediately, preventing stream desynchronization.
 - **Delimited ASCII Control**: All ASCII maintenance commands (`'E'`, `'R'`, `'P'`, `'?'`, `'H'`, `'I'`, `'D'`, `'M'`, `'G'`) require trailing newlines (`\n`), eliminating false triggers from arbitrary binary payload bytes matching ASCII command characters.
 - **Timer 1 Compare Match Guard**: In the hardware step engine, before `OCR1A` is written, the ISR verifies whether `TCNT1` has advanced past the intended compare target; if fewer than 160 ticks remain or a wraparound occurred, `OCR1A` is latched to `cur_tcnt + 160`, completely eliminating the 4.096 ms timer stalling bug.

@@ -64,9 +64,9 @@ WS_PORT = 8765
 UDP_PORT = 8766
 HTTP_PORT = 8000
 
-# Look-ahead buffering into MCU clock domain (80-120 ms)
-LEAD_BUFFER_MS = 100.0
-LEAD_BUFFER_TICKS = int(LEAD_BUFFER_MS * (MCU_FREQ_HZ / 1000.0))  # 1,600,000 ticks @ 16 MHz
+# Look-ahead buffering into MCU clock domain (50-80 ms)
+LEAD_BUFFER_MS = 60.0
+LEAD_BUFFER_TICKS = int(LEAD_BUFFER_MS * (MCU_FREQ_HZ / 1000.0))  # 960,000 ticks @ 16 MHz
 STATUS_BROADCAST_INTERVAL_S = 0.05  # 20 Hz telemetry broadcast
 TRAJECTORY_SAMPLE_DT_S = 0.01       # 100 Hz fluent trajectory discretization window (10 ms)
 
@@ -325,6 +325,7 @@ class RobotEngine:
 
         # Look-ahead chunk management (per joint)
         self.free_slots: List[int] = [16] * 6
+        self.in_flight_chunks: List[List[int]] = [[] for _ in range(6)]
         self.pending_chunks: List[List[StepChunkData]] = [[] for _ in range(6)]
         self.streaming_lock = asyncio.Lock()
 
@@ -351,9 +352,11 @@ class RobotEngine:
 
         # Teleoperation Conditioning: Ingestion Outlier Gate & Adaptive 1-Euro Filter
         self.teleop_filter = OneEuroFilter6D(min_cutoff=1.0, beta=0.05, d_cutoff=1.0)
+        self.last_gated_targets: Optional[List[float]] = None
         self.joint_stream_last_interval: List[int] = [0] * 6
         self.joint_stream_last_dir: List[int] = [0] * 6
         self.last_stream_rx_time: float = 0.0
+        self.commanded_jog_target: List[float] = [0.0] * 6
 
         # Start serial listener worker thread
         self.serial_thread = threading.Thread(target=self._serial_worker_thread, daemon=True)
@@ -529,15 +532,16 @@ class RobotEngine:
                         else:
                             rx_buf.pop(0)
 
-                    # '!': Comprehensive telemetry frame (32 bytes: '!' + flags + 24B pos + endstops + 4B clock + '\n')
+                    # '!': Comprehensive telemetry frame (38 bytes: '!' + flags + 24B pos + 6B free_slots + endstops + 4B clock + '\n')
                     elif header == ord('!'):
-                        if len(rx_buf) < 32:
+                        if len(rx_buf) < 38:
                             break
-                        if rx_buf[31] == ord('\n'):
+                        if rx_buf[37] == ord('\n'):
                             flags = rx_buf[1]
                             positions = struct.unpack("<6i", rx_buf[2:26])
-                            endstops = rx_buf[26]
-                            mcu_clock = struct.unpack("<I", rx_buf[27:31])[0]
+                            mcu_free_slots = struct.unpack("<6B", rx_buf[26:32])
+                            endstops = rx_buf[32]
+                            mcu_clock = struct.unpack("<I", rx_buf[33:37])[0]
 
                             t_now = time.monotonic()
                             self.last_mcu_clock = mcu_clock
@@ -548,11 +552,13 @@ class RobotEngine:
                             has_pending = any(len(q) > 0 for q in self.pending_chunks)
                             is_busy = is_mcu_stepping or has_pending
 
-                            if not is_mcu_stepping:
-                                # When MCU is not actively executing step chunks, its ring buffers are empty
+                            for j in range(6):
+                                self.free_slots[j] = mcu_free_slots[j]
+
+                            if not is_mcu_stepping and not has_pending:
                                 self.free_slots = [16] * 6
-                                if not has_pending:
-                                    self.joint_stream_end_clock = [0] * 6
+                                self.joint_stream_end_clock = [0] * 6
+                                self.in_flight_chunks = [[] for _ in range(6)]
 
                             was_homing = (self.state == "HOMING")
                             if flags & 0x01:
@@ -583,10 +589,12 @@ class RobotEngine:
                                 self.jitter_buffer.reset()
                                 for q in self.pending_chunks:
                                     q.clear()
+                                self.in_flight_chunks = [[] for _ in range(6)]
+                                self.commanded_jog_target = list(self.joints_deg)
                                 logger.info("Homing sequence complete! Targets synchronized to physical pose: %s", self.joints_deg)
 
                             self.mcu_packets_rx += 1
-                            rx_buf = rx_buf[32:]
+                            rx_buf = rx_buf[38:]
                         else:
                             rx_buf.pop(0)
 
@@ -745,9 +753,12 @@ class RobotEngine:
         for q in self.pending_chunks:
             q.clear()
         self.free_slots = [16] * 6
+        self.in_flight_chunks = [[] for _ in range(6)]
         self.joint_stream_end_clock = [0] * 6
         self.joint_stream_last_interval = [0] * 6
         self.joint_stream_last_dir = [0] * 6
+        self.commanded_jog_target = list(self.joints_deg)
+        self.last_gated_targets = None
         self.teleop_filter.reset(self.joints_deg)
         self.jitter_buffer.reset()
         self.write_raw(b'E\n')
@@ -758,10 +769,13 @@ class RobotEngine:
         for q in self.pending_chunks:
             q.clear()
         self.free_slots = [16] * 6
+        self.in_flight_chunks = [[] for _ in range(6)]
         self.joint_stream_end_clock = [0] * 6
         self.joint_stream_last_interval = [0] * 6
         self.joint_stream_last_dir = [0] * 6
         self.target_joints_deg = list(self.joints_deg)
+        self.commanded_jog_target = list(self.joints_deg)
+        self.last_gated_targets = None
         self.teleop_filter.reset(self.joints_deg)
         self.jitter_buffer.reset()
         self.write_raw(b'R\n')
@@ -775,9 +789,12 @@ class RobotEngine:
         for q in self.pending_chunks:
             q.clear()
         self.free_slots = [16] * 6
+        self.in_flight_chunks = [[] for _ in range(6)]
         self.joint_stream_end_clock = [0] * 6
         self.joint_stream_last_interval = [0] * 6
         self.joint_stream_last_dir = [0] * 6
+        self.commanded_jog_target = list(self.joints_deg)
+        self.last_gated_targets = None
         self.teleop_filter.reset(self.joints_deg)
         self.jitter_buffer.reset()
         payload = struct.pack("<B B B", ord('H'), mask & 0xFF, ord('\n'))
@@ -858,6 +875,7 @@ class RobotEngine:
             return False
 
         self.stream_packet_count += 1
+        prev_rx = self.stream_last_rx
         now_mono = time.monotonic()
         self.stream_last_rx = now_mono
         self.last_stream_rx_time = now_mono
@@ -866,26 +884,26 @@ class RobotEngine:
         clamped_incoming = self.kinematics.clamp_joints(target_joints_deg)
         dt_clamped = max(0.005, min(0.2, float(dt)))
 
-        # Ensure teleop filter is initialized to current joints if reset/clean
-        if self.teleop_filter.filters[0].last_x is None:
+        # Ground teleop filter to live joint pose if stream was inactive or uninitialized
+        if (now_mono - prev_rx > 0.25) or (self.last_gated_targets is None) or (self.teleop_filter.filters[0].last_x is None):
+            self.last_gated_targets = list(self.joints_deg)
             self.teleop_filter.reset(self.joints_deg)
 
         # 1. Ingestion & Outlier Gate: enforce physical velocity sanity check on joint deltas
         gated_targets = [0.0] * 6
         for j in range(6):
-            filt_pos = self.teleop_filter.filters[j].last_x
-            if filt_pos is None:
-                filt_pos = self.joints_deg[j]
-
-            raw_delta_deg = clamped_incoming[j] - filt_pos
+            prev_gated = self.last_gated_targets[j]
+            raw_delta_deg = clamped_incoming[j] - prev_gated
             omega_deg_s = raw_delta_deg / dt_clamped
             omega_limit_deg_s = self.planner.joint_speeds[j] * self.speed_scale
 
             if abs(omega_deg_s) > omega_limit_deg_s:
                 # Clamp to safe physical rate
-                gated_targets[j] = filt_pos + math.copysign(omega_limit_deg_s * dt_clamped, raw_delta_deg)
+                gated_targets[j] = prev_gated + math.copysign(omega_limit_deg_s * dt_clamped, raw_delta_deg)
             else:
                 gated_targets[j] = clamped_incoming[j]
+
+        self.last_gated_targets = list(gated_targets)
 
         # 2. Adaptive 1-Euro Filter
         filtered_targets = self.teleop_filter.filter(gated_targets, dt_clamped)
@@ -912,7 +930,7 @@ class RobotEngine:
                 direction = 1 if steps > 0 else 0
                 abs_steps = abs(steps)
 
-                # Determine chunk start clock: chain seamlessly with 80-120 ms lead buffer
+                # Determine chunk start clock: chain seamlessly with lead buffer
                 end_clock = self.joint_stream_end_clock[j]
                 signed_lead = (int(end_clock) - int(now_mcu)) & 0xFFFFFFFF
                 if signed_lead > 0x80000000:
@@ -920,11 +938,14 @@ class RobotEngine:
 
                 starved = False
                 if end_clock == 0 or signed_lead <= 0:
-                    # Buffer starved or reset: initialize lead buffer (100 ms in future)
-                    start_clock = (now_mcu + LEAD_BUFFER_TICKS) & 0xFFFFFFFF
+                    # Soft recovery: if late by < 25 ms, start immediately (now_mcu + 5 ms) rather than inserting dead gap!
+                    if end_clock != 0 and -signed_lead < int(0.025 * MCU_FREQ_HZ):
+                        start_clock = (now_mcu + int(0.005 * MCU_FREQ_HZ)) & 0xFFFFFFFF
+                    else:
+                        start_clock = (now_mcu + LEAD_BUFFER_TICKS) & 0xFFFFFFFF
                     starved = True
                 elif signed_lead > (LEAD_BUFFER_TICKS * 3):
-                    # Excess latency buildup (>300 ms): resynchronize
+                    # Excess latency buildup (>180 ms): resynchronize
                     start_clock = (now_mcu + LEAD_BUFFER_TICKS) & 0xFFFFFFFF
                     starved = True
                 else:
@@ -1240,6 +1261,7 @@ class RobotEngine:
                         else:
                             # Reached complete standstill: transition smoothly to IDLE without snapback
                             self.teleop_filter.reset(self.target_joints_deg)
+                            self.last_gated_targets = None
                             for j in range(6):
                                 self.joint_stream_last_interval[j] = 0
                             if not any(len(q) > 0 for q in self.pending_chunks):
@@ -1286,17 +1308,48 @@ class RobotEngine:
 
     async def stream_pending_chunks(self):
         """
-        Transmit pending step chunks to MCU using 12-byte CRC-checked CompactStepChunk frames.
-        Paced to send max 1 chunk (12 bytes) per iteration to strictly prevent
-        overflowing the ATmega2560's hardware UART RX buffer (64 bytes).
+        Burst Fill & High-Water Mark Pacer:
+        Transmits pending step chunks to MCU using 12-byte CRC-checked CompactStepChunk frames.
+        Maintains the MCU buffer saturated (4-8 chunks deep per active joint) without exceeding
+        the 64-byte hardware UART RX buffer by sending up to 4 chunks (48 bytes max) per iteration.
         """
         async with self.streaming_lock:
+            # 1. Update in-flight chunks and free slots based on live MCU clock
+            now_mcu = self.get_estimated_mcu_clock()
             for j in range(6):
-                if self.free_slots[j] > 4 and len(self.pending_chunks[j]) > 0:
-                    chunk = self.pending_chunks[j].pop(0)
-                    self.write_raw(chunk.serialize_compact())
-                    self.free_slots[j] -= 1
-                    return
+                while self.in_flight_chunks[j]:
+                    end_clk = self.in_flight_chunks[j][0]
+                    diff = (int(now_mcu) - int(end_clk)) & 0xFFFFFFFF
+                    if diff < 0x80000000:
+                        # Chunk finished executing on MCU!
+                        self.in_flight_chunks[j].pop(0)
+                    else:
+                        break
+                # Actual available slots in MCU hardware queue
+                self.free_slots[j] = max(0, 16 - len(self.in_flight_chunks[j]))
+
+            # 2. Burst-fill up to 4 chunks total (48 bytes) across joints with free slots >= 2
+            chunks_sent = 0
+            max_burst_chunks = 4  # 4 * 12 = 48 bytes (< 64B hardware buffer)
+
+            active_joints = [j for j in range(6) if len(self.pending_chunks[j]) > 0 and self.free_slots[j] >= 2]
+            while chunks_sent < max_burst_chunks and active_joints:
+                for j in list(active_joints):
+                    if chunks_sent >= max_burst_chunks:
+                        break
+                    if len(self.pending_chunks[j]) > 0 and self.free_slots[j] >= 2:
+                        chunk = self.pending_chunks[j].pop(0)
+                        self.write_raw(chunk.serialize_compact())
+                        self.free_slots[j] -= 1
+
+                        # Calculate chunk end clock for in-flight tracking
+                        count = chunk.step_count
+                        dur = count * chunk.interval + (count * (count - 1) // 2) * chunk.add
+                        chunk_end = (chunk.first_step_clock + max(dur, count * 160)) & 0xFFFFFFFF
+                        self.in_flight_chunks[j].append(chunk_end)
+                        chunks_sent += 1
+                    else:
+                        active_joints.remove(j)
 
     async def chunk_pump_loop(self):
         """
@@ -1572,10 +1625,12 @@ class RobotEngine:
                     delta = float(payload.get("delta_deg", 0.0))
                     speed = float(payload.get("speed", 0.5))
                     if 0 <= joint_idx < 6:
-                        ref = list(self.target_joints_deg) if self.state == "MOVING" else list(self.joints_deg)
-                        ref[joint_idx] += delta
-                        clamped = self.kinematics.clamp_joints(ref)
-                        asyncio.create_task(self.execute_joint_move(clamped, speed_factor=speed))
+                        now_mono = time.monotonic()
+                        if self.state != "MOVING" or (now_mono - self.last_stream_rx_time > 0.25):
+                            self.commanded_jog_target = list(self.joints_deg)
+                        self.commanded_jog_target[joint_idx] += delta
+                        clamped = self.kinematics.clamp_joints(self.commanded_jog_target)
+                        await self.servo_to_joints(clamped, dt=0.05)
                         await websocket.send(json.dumps({"type": "ACK", "cmd": "JOG_JOINT", "status": "OK"}))
 
                 elif cmd == "MOVE_JOINTS":
@@ -1606,12 +1661,17 @@ class RobotEngine:
                     axis = payload.get("axis", "Z").upper()
                     delta = float(payload.get("delta", 0.0))
                     speed = float(payload.get("speed", 0.5))
-                    ref_joints = list(self.target_joints_deg) if self.state == "MOVING" else list(self.joints_deg)
-                    curr_pose = self.kinematics.fk_pose(ref_joints)
+                    now_mono = time.monotonic()
+                    if self.state != "MOVING" or (now_mono - self.last_stream_rx_time > 0.25):
+                        self.commanded_jog_target = list(self.joints_deg)
+                    curr_pose = self.kinematics.fk_pose(self.commanded_jog_target)
                     axis_map = {"X": 0, "Y": 1, "Z": 2, "RX": 3, "RY": 4, "RZ": 5, "ROLL": 3, "PITCH": 4, "YAW": 5}
                     if axis in axis_map:
                         curr_pose[axis_map[axis]] += delta
-                        asyncio.create_task(self.execute_cartesian_move(curr_pose, speed_factor=speed))
+                        ik_res = self.kinematics.solve_ik(curr_pose, seed_joints_deg=self.commanded_jog_target)
+                        if ik_res and ik_res[0]:
+                            self.commanded_jog_target = list(ik_res[1])
+                            await self.servo_to_joints(self.commanded_jog_target, dt=0.05)
                         await websocket.send(json.dumps({"type": "ACK", "cmd": "JOG_CARTESIAN", "status": "OK"}))
 
                 elif cmd == "MOVE_CARTESIAN":

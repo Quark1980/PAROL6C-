@@ -174,13 +174,13 @@ def run_test_serial(port: Optional[str] = None) -> Dict[str, Any]:
         print("[*] Halting serial communication for 300 ms (Tier 2 watchdog timeout >250 ms)...")
         time.sleep(0.35)
 
-        # Query status ('?' packet returns 32-byte binary frame)
+        # Query status ('?' packet returns 38-byte binary frame with live free_slots)
         ser.reset_input_buffer()
         ser.write(b"?\n")
-        status_raw = ser.read(32)
+        status_raw = ser.read(38)
         watchdog_triggered = False
-        if len(status_raw) == 32 and status_raw[0] == ord("!") and status_raw[-1] == ord("\n"):
-            header, flags, j1, j2, j3, j4, j5, j6, endstops, clock, newline = struct.unpack("<c B 6i B I c", status_raw)
+        if len(status_raw) == 38 and status_raw[0] == ord("!") and status_raw[-1] == ord("\n"):
+            header, flags, j1, j2, j3, j4, j5, j6, f1, f2, f3, f4, f5, f6, endstops, clock, newline = struct.unpack("<c B 6i 6B B I c", status_raw)
             is_estop = bool(flags & 0x01)
             is_busy = bool(flags & 0x04)
             print(f"    - Post-stall status frame: Flags=0x{flags:02X} (ESTOP={is_estop}, BUSY={is_busy}), Endstops=0x{endstops:02X}")
@@ -466,6 +466,13 @@ async def _async_test_estop() -> Dict[str, Any]:
                 "speed": 0.2
             }))
             await asyncio.sleep(0.05)
+
+            # Drain any pending incoming telemetry messages before timing
+            while True:
+                try:
+                    await asyncio.wait_for(ws.recv(), timeout=0.005)
+                except asyncio.TimeoutError:
+                    break
 
             # 2. Fire unbuffered ESTOP command & measure latency to ACK
             print("[*] Firing unbuffered ESTOP command...")
