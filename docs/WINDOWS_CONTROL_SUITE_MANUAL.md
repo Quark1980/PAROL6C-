@@ -859,3 +859,24 @@ When interfacing physical robotics with desktop GUI frameworks (WPF / WinUI):
 | **Look-Ahead Jitter Buffer** | RPi chains quadratic step chunks (`first_step_clock, count, interval, add, dir`) into 16-chunk hardware buffers on ATmega2560. |
 | **Real-Time Follower** | Streams at 20 Hz to 50 Hz with continuous phase-locked step execution. |
 | **Safety Interlocks** | Hardware E-Stop pin disconnects coils immediately; RPi clamps target joint angles against software boundaries. |
+
+---
+
+## 9. Parallel Multi-Stage Homing & Live Diagnostics Dashboard
+
+### 9.1 Multi-Stage Homing Sequence
+The homing sequencer executed on `HOME ALL` is optimized to reduce total homing time while protecting physical wiring and optical switches:
+1. **Parallel Stage (`[J1 + J2 + J3]`)**: J1 (Base), J2 (Shoulder), and J3 (Elbow) home simultaneously. Each joint operates an independent soft-start ramp, 3° backoff, and 5-sample debounced precision latch at 3°/s.
+2. **Sequential Wrist Stage**:
+   - `J4` homes to $+270^\circ$ and retreats to $-260^\circ$.
+   - `J6 (Pass 1)` homes to $+360^\circ$ and retreats to $-4^\circ$.
+   - `J5` pre-moves J6 by $-10^\circ$, homes J5 to $-360^\circ$, retreats to $+120^\circ$, and post-moves J6 by $-5^\circ$.
+   - `J6 (Pass 2)` re-homes J6 to restore true physical zero, completely compensating for the cumulative $-15^\circ$ displacement incurred during J5's clearance maneuvers.
+3. **CAD Zero Reference**: Locks step positions to the physical PAROL6 CAD zero ($J_1=0^\circ, J_2=-90^\circ, J_3=180^\circ, J_4=0^\circ, J_5=0^\circ, J_6=180^\circ$) and unlocks the motion pipeline (`HOMED: True`).
+
+### 9.2 Live I/O Hardware Monitor Window
+The dedicated **DEBUG STREAM** window provides a comprehensive real-time hardware I/O inspection strip:
+- **6 Endstop Status Badges**: Labeled with RAMPS pins (`J1:PE5`, `J2:PE4`, `J3:PJ1`, `J4:PJ0`, `J5:PD3`, `J6:PD2`), displaying green `TRIG` when actuated and slate `OPEN` when unactuated.
+- **Polarity Readouts**: Live display of `DIR INVERT` (ground truth: `0x03` = J1, J2) and `STOP INVERT` (ground truth: `0x00`).
+- **Restore Defaults**: One-click recovery button triggering `RESET_INVERT_MASKS` to restore baseline settings.
+- **Coordinates & Step Buffer Meters**: Live joint angle coordinates and per-axis ring buffer slot occupancies.

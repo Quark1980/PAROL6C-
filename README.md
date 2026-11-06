@@ -12,8 +12,19 @@ This ecosystem replaces the legacy Klipper-based control suite with a determinis
 ### Key Architectural Highlights:
 - **NO G-Code Parsing**: Motion commands are streamed directly as high-frequency joint targets (`SERVO_JOINTS`) or discrete quadratic step chunks (`'Q'`).
 - **NO Delay Loops in Motion**: Pure event-driven stepping scheduled via 16 MHz Timer 1 virtualized 32-bit hardware clock ($62.5\text{ ns}$ resolution). When the robot is stationary, the step interrupt rate is **0 Hz**.
+- **Optimized Multi-Stage Parallel Homing**:
+  - **Stage 1 (Parallel)**: Axis **J1, J2, and J3** home concurrently (`[J1+J2+J3]`) with independent soft-start acceleration, backoff, and 5-sample debounced precision latching.
+  - **Stage 2 (Forearm)**: **J4** seeks endstop, precision latches, and retreats to $-260.0^\circ$.
+  - **Stage 3 (Wrist Pass 1)**: **J6** seeks endstop, precision latches, and retreats to $-4.0^\circ$.
+  - **Stage 4 (Wrist Pitch)**: **J5** pre-moves J6 by $-10.0^\circ$, seeks endstop, precision latches, retreats to $+120.0^\circ$, and post-moves J6 by $-5.0^\circ$.
+  - **Stage 5 (Wrist Pass 2)**: **J6** executes a dedicated second homing pass to completely eliminate the $-15.0^\circ$ displacement incurred during J5's clearance maneuvers.
+  - **Stage 6 (CAD Zero Reference)**: Physical step positions are locked directly to the PAROL6 CAD zero definition ($J_1=0^\circ, J_2=-90^\circ, J_3=180^\circ, J_4=0^\circ, J_5=0^\circ, J_6=180^\circ$) and the safety interlock is unlocked (`homed_mask == 0x3F`).
+- **Hardware Polarity Ground Truth**:
+  - `dir_invert_mask`: `0x03` (`0b00000011` — only J1 `!PF1` and J2 `!PF7` inverted, matching `current printer.cfg`).
+  - `endstop_invert_mask`: `0x00` (all 6 limit switches active-high pulled-up `^PE5`, `^PE4`, `^PJ1`, `^PJ0`, `^PD3`, `^PD2`).
+  - Automated polarity sync on serial connect and `RESET_INVERT_MASKS` WebSocket API.
 - **TI DRV8825 Step Pulse Timing**: Direct AVR port register toggles guarantee step pulse hold $\ge 2.5\ \mu\text{s}$ via inline assembly delays (`__builtin_avr_delay_cycles(42)`), meeting the DRV8825 $t_{\text{WH(STEP)}}$ specification across all 6 axes.
-- **Hardware Safety Interlock**: Both the MCU and host daemon strictly reject all joint moves and streaming packets until the hardware homing sequence has completed successfully (`homed_mask == 0x3F`).
+- **Hardware Safety Interlock**: Both the MCU and host daemon strictly reject all joint moves, jogging, and streaming packets until the hardware homing sequence has completed successfully (`homed_mask == 0x3F`).
 - **Persistent Homing Offset Trims**: Switch position adjustments and mechanical hysteresis are calibrated dynamically on the Pi via `offsets.json` and the touchscreen UI without re-flashing firmware.
 - **Zero-Latency Touchscreen E-Stop**: The on-screen Emergency Stop button is wired to `pointerdown` for immediate network execution and MCU coil de-energization.
 

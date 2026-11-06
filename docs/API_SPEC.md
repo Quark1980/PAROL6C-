@@ -127,11 +127,17 @@ All pin assignments directly mirror the baseline `printer.cfg` configuration for
 - **Payload**: `b'H' <joint_mask:uint8> b'\n'` (3 bytes total, `0xFF` = all axes)
 - **Response**: `b'H' \x01 b'\n'` on start; broadcasts completion when finished.
 - **State Machine Architecture**:
-  1. **Order of Operation**: Sequentially executes `J2 (Shoulder) -> J3 (Elbow) -> J1 (Base) -> J4 (Forearm) -> J6 (Wrist Roll) -> J5 (Wrist Pitch)`.
-  2. **Soft-Start Ramp**: Initial acceleration ramp starting at $5.0^\circ/\text{s}$ ramping smoothly to `seek_speed` (prevents mechanical jerk).
+  1. **Order of Operation**:
+     - **Stage 1 (Parallel Simultaneous)**: Concurrent stepping of `[J1 + J2 + J3]` (`HOMING_STAGE_J123_PARALLEL`). All three joints seek and latch their switches simultaneously, drastically reducing homing duration while eliminating mechanical collision risks.
+     - **Stage 2 (Forearm)**: `J4` (`HOMING_STAGE_J4`) moves $+270^\circ$, latches, and retreats to $-260.0^\circ$.
+     - **Stage 3 (Wrist Pass 1)**: `J6` (`HOMING_STAGE_J6_PASS1`) moves $+360^\circ$, latches, and retreats to $-4.0^\circ$.
+     - **Stage 4 (Wrist Pitch)**: `J5` (`HOMING_STAGE_J5`) pre-moves `J6` by $-10.0^\circ$ (to clear optical flags and cabling), moves `J5` by $-360^\circ$, latches, retreats to $+120.0^\circ$, and post-moves `J6` by $-5.0^\circ$.
+     - **Stage 5 (Wrist Pass 2)**: `J6` (`HOMING_STAGE_J6_PASS2`) homes a second time to eliminate the cumulative $-15.0^\circ$ displacement incurred during J5's clearance maneuvers, precision-latching and retreating to $-4.0^\circ$.
+     - **Stage 6 (CAD Zero Reference)**: Physical step positions are locked directly to the PAROL6 CAD zero reference ($J_1=0^\circ, J_2=-90^\circ, J_3=180^\circ, J_4=0^\circ, J_5=0^\circ, J_6=180^\circ$) and the safety interlock is unlocked (`homed_mask == 0x3F`).
+  2. **Soft-Start Ramp**: Initial acceleration ramp starting at $5.0^\circ/\text{s}$ ramping smoothly to `seek_speed` (prevents mechanical jerk and tooth skipping).
   3. **Switch Release**: On first contact, backs off until limit switch opens (`SUBSTATE_LATCH_RELEASE`).
   4. **Precision Latch**: Re-approaches switch at $3.0^\circ/\text{s}$ with 5-sample digital debounce filter (`SUBSTATE_LATCH_PRECISION`).
-  5. **CAD Zero Retreat**: Smoothly accelerates and decelerates to the configured `retreat_pos` (CAD zero) based on baseline `printer.cfg` calibration constants.
+  5. **CAD Zero Retreat**: Smoothly accelerates and decelerates to the configured `retreat_pos` based on baseline `printer.cfg` calibration constants.
 
 #### Telemetry Query (`'?'`)
 - **Payload**: `b'?'` (1 byte)
@@ -288,6 +294,33 @@ To accommodate physical switch placement variations and mechanical click hystere
   The calibrated joint angle transmitted to clients and used in kinematics is computed directly as:
   $$\theta_{\text{calibrated}} = \left(\frac{\text{raw\_mcu\_steps}}{\text{STEPS\_PER\_DEG}}\right) + \text{trim}_{\text{deg}}$$
   Relative joint deltas $\Delta \theta$ during trajectory generation and streaming are invariant to the trim offset, ensuring that trajectory execution remains smooth while CAD zero aligns precisely with the physical robot arm.
+
+#### 12. Reset Hardware Invert Masks (`RESET_INVERT_MASKS`)
+Restores motor direction and limit switch polarity masks to the ground-truth baseline (`current printer.cfg`):
+```json
+{"cmd": "RESET_INVERT_MASKS"}
+```
+- **Daemon Action**:
+  - Sets `dir_invert_mask` to `0x03` (inverting J1 and J2 only).
+  - Sets `endstop_invert_mask` to `0x00` (normal active-high pulled-up switches).
+  - Immediately transmits `'D'` and `'I'` configuration frames to the ATmega2560 via USB-UART.
+- **Daemon Response**:
+  ```json
+  {
+    "type": "ACK",
+    "cmd": "RESET_INVERT_MASKS",
+    "status": "OK",
+    "dir_invert_mask": 3,
+    "endstop_invert_mask": 0
+  }
+  ```
+
+#### 13. Dynamic Polarity Configuration (`SET_DIR_INVERT` / `SET_ENDSTOP_INVERT`)
+Allows dynamic reconfiguration of direction or endstop masks from diagnostic dashboards:
+```json
+{"cmd": "SET_DIR_INVERT", "mask": 3}
+{"cmd": "SET_ENDSTOP_INVERT", "mask": 0}
+```
 
 ---
 
