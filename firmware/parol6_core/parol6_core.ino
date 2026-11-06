@@ -376,98 +376,179 @@ void loop() {
         rx_idx = 0;
     }
 
-    // 3. Process incoming serial commands
+    // 3. Process incoming serial commands with robust framing & sliding-window resync
     while (Serial.available() > 0) {
         int b = Serial.read();
         if (b < 0) break;
         last_rx_time_ms = millis();
         last_comm_time_ms = last_rx_time_ms;
 
-        // 1. When NOT inside a packet payload: parse instant single-byte triggers or packet headers
-        if (rx_idx == 0) {
-            if (b == 'E') {
-                handle_estop();
-                continue;
-            } else if (b == 'R') {
-                handle_reset();
-                continue;
-            } else if (b == 'P') {
-                handle_ping();
-                continue;
-            } else if (b == '?') {
-                handle_query_status();
-                continue;
-            }
-
-            // Start of framed command: 0x55 (CompactStepChunk), 'C', 'Q', 'S', 'G', 'H', 'M', 'I', 'D'
-            if (b == 0x55 || b == 'C' || b == 'Q' || b == 'S' || b == 'G' || b == 'H' || b == 'M' || b == 'I' || b == 'D') {
-                rx_buffer[rx_idx++] = (uint8_t)b;
-            }
-        } else {
-            // Inside framed packet: store bytes strictly into buffer without corrupting binary data
+        // Store into receive buffer
+        if (rx_idx < sizeof(rx_buffer)) {
             rx_buffer[rx_idx++] = (uint8_t)b;
+        } else {
+            // Buffer overflow guard: shift left by 1 byte to attempt resync
+            memmove((void*)&rx_buffer[0], (void*)&rx_buffer[1], sizeof(rx_buffer) - 1);
+            rx_buffer[sizeof(rx_buffer) - 1] = (uint8_t)b;
+        }
 
-            // 0x55 or 'C': 11-byte CompactStepChunk
-            if ((rx_buffer[0] == 0x55 || rx_buffer[0] == 'C') && rx_idx == 11) {
-                handle_compact_step_chunk(&rx_buffer[1]);
+        // Process recognized packet framing
+        bool packet_processed = false;
+
+        // 1. Delimited single-byte ASCII maintenance commands (Command + '\n')
+        if (rx_buffer[0] == 'E') {
+            if (rx_idx >= 2 && rx_buffer[1] == '\n') {
+                handle_estop();
                 rx_idx = 0;
+                packet_processed = true;
+            } else if (rx_idx >= 2) {
+                // Not followed by '\n': shift left to resync
+                memmove((void*)&rx_buffer[0], (void*)&rx_buffer[1], --rx_idx);
             }
-            // 'Q' packet requires header 'Q' + 12 bytes = 13 bytes total
-            else if (rx_buffer[0] == 'Q' && rx_idx == 13) {
+        }
+        else if (rx_buffer[0] == 'R') {
+            if (rx_idx >= 2 && rx_buffer[1] == '\n') {
+                handle_reset();
+                rx_idx = 0;
+                packet_processed = true;
+            } else if (rx_idx >= 2) {
+                memmove((void*)&rx_buffer[0], (void*)&rx_buffer[1], --rx_idx);
+            }
+        }
+        else if (rx_buffer[0] == 'P') {
+            if (rx_idx >= 2 && rx_buffer[1] == '\n') {
+                handle_ping();
+                rx_idx = 0;
+                packet_processed = true;
+            } else if (rx_idx >= 2) {
+                memmove((void*)&rx_buffer[0], (void*)&rx_buffer[1], --rx_idx);
+            }
+        }
+        else if (rx_buffer[0] == '?') {
+            if (rx_idx >= 2 && rx_buffer[1] == '\n') {
+                handle_query_status();
+                rx_idx = 0;
+                packet_processed = true;
+            } else if (rx_idx >= 2) {
+                memmove((void*)&rx_buffer[0], (void*)&rx_buffer[1], --rx_idx);
+            }
+        }
+
+        // 2. 0x55 or 'C': 12-byte CRC-checked CompactStepChunk (or 11-byte legacy)
+        else if (rx_buffer[0] == 0x55 || rx_buffer[0] == 'C') {
+            if (rx_idx == 12) {
+                // Verify XOR CRC8 of bytes 0..10 against byte 11
+                uint8_t crc = 0;
+                for (uint8_t i = 0; i < 11; i++) crc ^= rx_buffer[i];
+                if (crc == rx_buffer[11]) {
+                    handle_compact_step_chunk(&rx_buffer[1]);
+                    rx_idx = 0;
+                    packet_processed = true;
+                } else {
+                    // Checksum error or frame misalignment: slide left by 1 byte to find next sync
+                    uint8_t next_s = 0;
+                    for (uint8_t i = 1; i < rx_idx; i++) {
+                        if (rx_buffer[i] == 0x55 || rx_buffer[i] == 'C' || rx_buffer[i] == 'E' || rx_buffer[i] == 'R' || rx_buffer[i] == 'P' || rx_buffer[i] == '?' || rx_buffer[i] == 'H' || rx_buffer[i] == 'G' || rx_buffer[i] == 'M') {
+                            next_s = i;
+                            break;
+                        }
+                    }
+                    if (next_s > 0) {
+                        memmove((void*)&rx_buffer[0], (void*)&rx_buffer[next_s], rx_idx - next_s);
+                        rx_idx -= next_s;
+                    } else {
+                        rx_idx = 0;
+                    }
+                }
+            }
+        }
+
+        // 3. 'Q' packet: Header 'Q' + 12 bytes payload = 13 bytes total
+        else if (rx_buffer[0] == 'Q') {
+            if (rx_idx == 13) {
                 handle_q_step_chunk(&rx_buffer[1]);
                 rx_idx = 0;
+                packet_processed = true;
             }
-            // 'S' packet requires header 'S' + 13 bytes = 14 bytes total
-            else if (rx_buffer[0] == 'S' && rx_idx == 14) {
+        }
+
+        // 4. 'S' packet: Header 'S' + 13 bytes payload = 14 bytes total
+        else if (rx_buffer[0] == 'S') {
+            if (rx_idx == 14) {
                 handle_step_chunk(&rx_buffer[1]);
                 rx_idx = 0;
+                packet_processed = true;
             }
-            // 'M' packet requires header 'M' + 6 bytes payload + '\n' = 8 bytes total
-            else if (rx_buffer[0] == 'M' && rx_idx == 8) {
+        }
+
+        // 5. 'M' packet: Header 'M' + 6 bytes payload + '\n' = 8 bytes total
+        else if (rx_buffer[0] == 'M') {
+            if (rx_idx == 8) {
                 if (rx_buffer[7] == '\n') {
                     handle_manual_step(&rx_buffer[1]);
                 }
                 rx_idx = 0;
+                packet_processed = true;
             }
-            // 'I' packet requires header 'I' + 1 byte mask + '\n' = 3 bytes total
-            else if (rx_buffer[0] == 'I' && rx_idx == 3) {
+        }
+
+        // 6. 'I' packet: Header 'I' + 1 byte mask + '\n' = 3 bytes total
+        else if (rx_buffer[0] == 'I') {
+            if (rx_idx == 3) {
                 if (rx_buffer[2] == '\n') {
                     handle_set_invert(rx_buffer[1]);
                 }
                 rx_idx = 0;
+                packet_processed = true;
             }
-            // 'D' packet requires header 'D' + 1 byte mask + '\n' = 3 bytes total
-            else if (rx_buffer[0] == 'D' && rx_idx == 3) {
+        }
+
+        // 7. 'D' packet: Header 'D' + 1 byte mask + '\n' = 3 bytes total
+        else if (rx_buffer[0] == 'D') {
+            if (rx_idx == 3) {
                 if (rx_buffer[2] == '\n') {
                     handle_set_dir_invert(rx_buffer[1]);
                 }
                 rx_idx = 0;
+                packet_processed = true;
             }
-            // 'G' packet with 2 bytes pulse_us + '\n' = 4 bytes total
-            else if (rx_buffer[0] == 'G' && rx_idx == 4) {
+        }
+
+        // 8. 'G' packet: Header 'G' + 2 bytes pulse_us + '\n' = 4 bytes total
+        else if (rx_buffer[0] == 'G') {
+            if (rx_idx == 4) {
                 if (rx_buffer[3] == '\n') {
                     handle_gripper(&rx_buffer[1]);
                 }
                 rx_idx = 0;
+                packet_processed = true;
             }
-            // 'G' packet with 1 byte position + '\n' = 3 bytes total
-            else if (rx_buffer[0] == 'G' && rx_idx == 3) {
-                if (rx_buffer[2] == '\n') {
-                    uint16_t pulse = 500 + (uint16_t)rx_buffer[1] * 2000 / 255;
-                    set_gripper_pulse_us(pulse);
-                    Serial.write((uint8_t)0x06); // ACK
-                }
-                rx_idx = 0;
-            }
-            // 'H' packet requires header 'H' + 1 byte mask + '\n' = 3 bytes total
-            else if (rx_buffer[0] == 'H' && rx_idx == 3) {
+        }
+
+        // 9. 'H' packet: Header 'H' + 1 byte mask + '\n' = 3 bytes total
+        else if (rx_buffer[0] == 'H') {
+            if (rx_idx == 3) {
                 if (rx_buffer[2] == '\n') {
                     handle_homing_cmd(rx_buffer[1]);
                 }
                 rx_idx = 0;
+                packet_processed = true;
             }
-            // Safety buffer overrun reset
-            else if (rx_idx >= sizeof(rx_buffer)) {
+        }
+
+        // 10. Unrecognized header: slide buffer by 1 byte until valid start byte is found
+        else if (rx_idx > 0 && !packet_processed) {
+            uint8_t next_s = 0;
+            for (uint8_t i = 1; i < rx_idx; i++) {
+                if (rx_buffer[i] == 0x55 || rx_buffer[i] == 'C' || rx_buffer[i] == 'E' || rx_buffer[i] == 'R' || rx_buffer[i] == 'P' || rx_buffer[i] == '?' || rx_buffer[i] == 'H' || rx_buffer[i] == 'G' || rx_buffer[i] == 'M') {
+                    next_s = i;
+                    break;
+                }
+            }
+            if (next_s > 0) {
+                memmove((void*)&rx_buffer[0], (void*)&rx_buffer[next_s], rx_idx - next_s);
+                rx_idx -= next_s;
+            } else {
                 rx_idx = 0;
             }
         }

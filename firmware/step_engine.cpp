@@ -87,15 +87,22 @@ void step_engine_reschedule(void) {
 
     // 3. Set Compare Match OCR1A relative to Timer 1 counter
     // Minimum 160 ticks = 10 us (100 kHz safety ceiling) to prevent ISR choking foreground serial loop
-    if (min_diff <= 160) {
-        // Step event is due immediately or overdue: pace by at least 160 ticks (10 us)
-        OCR1A = TCNT1 + 160;
-    } else if (min_diff < 50000) {
-        // Event lies within current 16-bit counter window
-        OCR1A = (uint16_t)earliest_clock;
+    uint16_t cur_tcnt = TCNT1;
+    uint16_t target = (uint16_t)earliest_clock;
+    int32_t ticks_ahead = (int32_t)(earliest_clock - now) - (int32_t)((uint16_t)(cur_tcnt - (uint16_t)now));
+
+    if (ticks_ahead <= 160) {
+        OCR1A = cur_tcnt + 160;
+    } else if (ticks_ahead < 50000) {
+        OCR1A = target;
+        // CRITICAL RACE GUARD for 8-bit MCU: If TCNT1 advanced past target while setting OCR1A,
+        // force immediate compare match pace to prevent full 65,536 tick wrap (4.1 ms stall)
+        uint16_t after = TCNT1;
+        if ((uint16_t)(target - after) > 50000 || (uint16_t)(target - after) <= 16) {
+            OCR1A = after + 160;
+        }
     } else {
-        // Event is further ahead: set waypoint before timer wraps (~3.1 ms)
-        OCR1A = TCNT1 + 45000;
+        OCR1A = cur_tcnt + 45000;
     }
 
     SREG = sreg;

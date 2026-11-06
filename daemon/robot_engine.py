@@ -152,6 +152,18 @@ class JitterBuffer:
         self.overrun_count = 0
         self.last_pop_time = 0.0
 
+    def reset(self):
+        """Purge all buffered frames and reset playback horizon."""
+        with self.lock:
+            self.head = 0
+            self.tail = 0
+            self.count = 0
+            self.is_active = False
+            self.has_popped = False
+            self.base_client_ns = 0
+            self.base_host_ns = 0
+            self.last_playback_seq = -1
+
     def push(self, seq: int, timestamp_ns: int, opcode: int, payload: List[float], gripper: int, flags: int) -> bool:
         """Push an incoming motion frame into the jitter ring buffer. Zero runtime heap allocation."""
         now_ns = time.perf_counter_ns()
@@ -542,6 +554,7 @@ class RobotEngine:
                                 if not has_pending:
                                     self.joint_stream_end_clock = [0] * 6
 
+                            was_homing = (self.state == "HOMING")
                             if flags & 0x01:
                                 self.state = "ESTOP"
                             elif flags & 0x02:
@@ -551,6 +564,7 @@ class RobotEngine:
                             elif self.state != "ESTOP":
                                 self.state = "IDLE"
 
+                            just_homed = (not self.homed) and bool(flags & 0x08)
                             self.homed = bool(flags & 0x08)
 
                             # Always reflect live hardware joint positions directly from step counters + persistent trims
@@ -558,6 +572,18 @@ class RobotEngine:
                                 round((positions[i] / STEPS_PER_DEG[i]) + self.homing_trims_array[i], 3)
                                 for i in range(6)
                             ]
+
+                            # When homing completes, synchronize targets and reset filters to prevent flying off!
+                            if (was_homing and not (flags & 0x02)) or just_homed:
+                                self.target_joints_deg = list(self.joints_deg)
+                                self.teleop_filter.reset(self.joints_deg)
+                                self.joint_stream_end_clock = [0] * 6
+                                self.joint_stream_last_interval = [0] * 6
+                                self.joint_stream_last_dir = [0] * 6
+                                self.jitter_buffer.reset()
+                                for q in self.pending_chunks:
+                                    q.clear()
+                                logger.info("Homing sequence complete! Targets synchronized to physical pose: %s", self.joints_deg)
 
                             self.mcu_packets_rx += 1
                             rx_buf = rx_buf[32:]
@@ -723,7 +749,8 @@ class RobotEngine:
         self.joint_stream_last_interval = [0] * 6
         self.joint_stream_last_dir = [0] * 6
         self.teleop_filter.reset(self.joints_deg)
-        self.write_raw(b'E')
+        self.jitter_buffer.reset()
+        self.write_raw(b'E\n')
 
     def reset_system(self):
         """Clear errors and re-energize motor coils."""
@@ -734,14 +761,17 @@ class RobotEngine:
         self.joint_stream_end_clock = [0] * 6
         self.joint_stream_last_interval = [0] * 6
         self.joint_stream_last_dir = [0] * 6
+        self.target_joints_deg = list(self.joints_deg)
         self.teleop_filter.reset(self.joints_deg)
-        self.write_raw(b'R')
+        self.jitter_buffer.reset()
+        self.write_raw(b'R\n')
         self.state = "IDLE"
 
     def trigger_homing(self, mask: int = 0xFF):
         """Initiate upgraded hardware soft-start homing sequence."""
         logger.info("Homing triggered with axis mask: 0x%02X", mask)
         self.state = "HOMING"
+        self.homed = False
         for q in self.pending_chunks:
             q.clear()
         self.free_slots = [16] * 6
@@ -749,6 +779,7 @@ class RobotEngine:
         self.joint_stream_last_interval = [0] * 6
         self.joint_stream_last_dir = [0] * 6
         self.teleop_filter.reset(self.joints_deg)
+        self.jitter_buffer.reset()
         payload = struct.pack("<B B B", ord('H'), mask & 0xFF, ord('\n'))
         self.write_raw(payload)
 
@@ -922,7 +953,7 @@ class RobotEngine:
                 i_exit = i_start
 
                 while steps_remaining > 0:
-                    count = min(24, steps_remaining)
+                    count = min(48, steps_remaining)
 
                     if count <= 1:
                         chunk_iv = int(max(160, min(65535, i_start)))
@@ -1255,20 +1286,17 @@ class RobotEngine:
 
     async def stream_pending_chunks(self):
         """
-        Transmit pending step chunks to MCU using 11-byte CompactStepChunk frames.
-        Paced to send max 2 chunks (22 bytes) per pump iteration to strictly prevent
+        Transmit pending step chunks to MCU using 12-byte CRC-checked CompactStepChunk frames.
+        Paced to send max 1 chunk (12 bytes) per iteration to strictly prevent
         overflowing the ATmega2560's hardware UART RX buffer (64 bytes).
         """
         async with self.streaming_lock:
-            sent_total = 0
             for j in range(6):
-                while self.free_slots[j] > 2 and len(self.pending_chunks[j]) > 0:
+                if self.free_slots[j] > 4 and len(self.pending_chunks[j]) > 0:
                     chunk = self.pending_chunks[j].pop(0)
                     self.write_raw(chunk.serialize_compact())
                     self.free_slots[j] -= 1
-                    sent_total += 1
-                    if sent_total >= 2:
-                        return
+                    return
 
     async def chunk_pump_loop(self):
         """
@@ -1290,15 +1318,16 @@ class RobotEngine:
         while self.running:
             if self.mcu_connected:
                 self.last_ping_send = time.monotonic()
-                self.write_raw(b'P')
+                self.write_raw(b'P\n')
             await asyncio.sleep(0.05)
 
     async def query_status_loop(self):
-        """Query detailed hardware status from MCU at 20 Hz."""
+        """Query detailed hardware status from MCU at 20 Hz (or 5 Hz during motion)."""
         while self.running:
             if self.mcu_connected:
-                self.write_raw(b'?')
-            await asyncio.sleep(STATUS_BROADCAST_INTERVAL_S)
+                self.write_raw(b'?\n')
+            interval = 0.20 if self.state == "MOVING" else STATUS_BROADCAST_INTERVAL_S
+            await asyncio.sleep(interval)
 
     def get_telemetry_dict(self) -> Dict[str, Any]:
         """Construct real-time telemetry dictionary for WebSocket & Kiosk."""

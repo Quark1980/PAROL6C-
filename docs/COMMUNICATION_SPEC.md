@@ -224,31 +224,34 @@ stateDiagram-v2
 
 ## 5. Microcontroller Serial Protocol (USB-UART @ 250,000 Baud)
 
-### 5.1 Compact Step Chunk Frame (`0x55`, 11 Bytes Fixed Width)
+### 5.1 Compact Step Chunk Frame (`0x55`, 12 Bytes Fixed Width with XOR CRC8)
 
-Step trajectories are discretized by the host into quadratic acceleration step chunks using the 11-byte `CompactStepChunk` format:
+Step trajectories are discretized by the host into quadratic acceleration step chunks using the 12-byte `CompactStepChunk` format with integrated hardware framing checksum:
 
 ```
- 0        1        2..5         6..7        8..9        10
-+--------+--------+------------+-----------+-----------+--------+
-|  0x55  |axis_dir|start_clock |step_count | interval  |add_scld|
-| (uint8)| (uint8)|(uint32_le) |(uint16_le)|(uint16_le)| (int8) |
-+--------+--------+------------+-----------+-----------+--------+
+ 0        1        2..5         6..7        8..9        10       11
++--------+--------+------------+-----------+-----------+--------+--------+
+|  0x55  |axis_dir|start_clock |step_count | interval  |add_scld|  CRC8  |
+| (uint8)| (uint8)|(uint32_le) |(uint16_le)|(uint16_le)| (int8) | (uint8)|
++--------+--------+------------+-----------+-----------+--------+--------+
 ```
 
 | Byte Offset | Field | Type | Description |
 | :---: | :--- | :---: | :--- |
 | `0` | **Header** | `uint8` | Constant sync byte `0x55` (ASCII `'U'`) |
-| `1` | **axis_dir** | `uint8` | Bit-packed: `(dir << 7) \| (axis & 0x07)`.<br>Bits 0..2: Joint index (0 = J1, ..., 5 = J6).<br>Bit 7: Direction (1 = Positive, 0 = Negative). |
+| `1` | **axis_dir** | `uint8` | Bit-packed: `(dir << 3) | (axis & 0x07)`.<br>Bits 0..2: Joint index (0 = J1, ..., 5 = J6).<br>Bit 3: Direction (1 = Positive, 0 = Negative). |
 | `2..5` | **start_clock** | `uint32_le` | Absolute 16 MHz master clock tick when the first step fires |
 | `6..7` | **step_count** | `uint16_le` | Total number of step pulses in this quadratic chunk |
 | `8..9` | **interval** | `uint16_le` | Clock ticks between initial step pulses ($t_{\text{step}} = \text{interval} \times 62.5\text{ ns}$) |
-| `10` | **add_scaled** | `int8` | Scaled acceleration delta per step ($\Delta \text{interval} = \text{add\_scaled} \times 4$ ticks) |
+| `10` | **add_scaled** | `int8` | Scaled acceleration delta per step ($\Delta \text{interval} = \text{add\_scaled}$ ticks) |
+| `11` | **CRC8** | `uint8` | XOR CRC-8 checksum over bytes 0 through 10 |
 
-### 5.2 UART Buffer Flow Control & Pacing
+### 5.2 UART Buffer Flow Control & Sliding-Window Resynchronization
 - The ATmega2560 UART FIFO is strictly 64 bytes (`SERIAL_RX_BUFFER_SIZE = 64`).
-- The host trajectory streamer limits serial output to **$\le 2$ chunks (22 bytes) per 5 ms tick cycle**, leaving $>40$ bytes of headroom for incoming pings and E-Stop tokens.
-- All single-byte ASCII maintenance commands (`'H'`, `'I'`, `'D'`, `'M'`, `'G'`) require trailing newlines (`\n`), eliminating false triggers from binary payload bytes.
+- **Pacing**: The host trajectory streamer limits serial output to **strictly 1 chunk (12 bytes) per iteration**, requiring `free_slots[j] > 4`, guaranteeing the 64-byte UART hardware buffer never exceeds 16 bytes of depth.
+- **Sliding-Window Resync**: If a byte is dropped on the wire or a checksum mismatch occurs, the firmware scans for the next valid packet header (`0x55`, `'E'`, `'R'`, `'P'`, `'?'`, `'H'`, `'G'`, `'M'`) and uses `memmove` to realign the buffer window immediately, preventing stream desynchronization.
+- **Delimited ASCII Control**: All ASCII maintenance commands (`'E'`, `'R'`, `'P'`, `'?'`, `'H'`, `'I'`, `'D'`, `'M'`, `'G'`) require trailing newlines (`\n`), eliminating false triggers from arbitrary binary payload bytes matching ASCII command characters.
+- **Timer 1 Compare Match Guard**: In the hardware step engine, before `OCR1A` is written, the ISR verifies whether `TCNT1` has advanced past the intended compare target; if fewer than 160 ticks remain or a wraparound occurred, `OCR1A` is latched to `cur_tcnt + 160`, completely eliminating the 4.096 ms timer stalling bug.
 
 ---
 

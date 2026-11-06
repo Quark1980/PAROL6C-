@@ -143,7 +143,7 @@ def run_test_serial(port: Optional[str] = None) -> Dict[str, Any]:
 
         for i in range(100):
             t_send = time.perf_counter()
-            ser.write(b"P")
+            ser.write(b"P\n")
             resp = ser.read(6)  # Expected: b'P' <clock:uint32> b'\n'
             t_recv = time.perf_counter()
 
@@ -176,7 +176,7 @@ def run_test_serial(port: Optional[str] = None) -> Dict[str, Any]:
 
         # Query status ('?' packet returns 32-byte binary frame)
         ser.reset_input_buffer()
-        ser.write(b"?")
+        ser.write(b"?\n")
         status_raw = ser.read(32)
         watchdog_triggered = False
         if len(status_raw) == 32 and status_raw[0] == ord("!") and status_raw[-1] == ord("\n"):

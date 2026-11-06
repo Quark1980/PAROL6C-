@@ -22,7 +22,7 @@ from kinematics import (
 
 MCU_FREQ_HZ = 16000000.0
 MIN_STEP_INTERVAL_TICKS = 160 # 10 us (100 kHz max step rate)
-MAX_CHUNK_STEPS = 24          # Max steps per quadratic chunk
+MAX_CHUNK_STEPS = 48          # Max steps per quadratic chunk (48 steps reduces UART frame volume by 50%)
 
 
 @dataclass
@@ -56,14 +56,14 @@ class StepChunkData:
 
     def serialize_compact(self) -> bytes:
         """
-        Encode chunk to 11-byte ultra-compact binary frame matching firmware:
-        [Header: 0x55][axis_dir: u8][start_clock: u32_le][step_count: u16_le][interval: u16_le][add_scaled: i8]
+        Encode chunk to 12-byte ultra-compact binary frame with XOR CRC matching firmware:
+        [Header: 0x55][axis_dir: u8][start_clock: u32_le][step_count: u16_le][interval: u16_le][add_scaled: i8][crc: u8]
         axis_dir packs joint index 0..5 in bits 0..2, dir in bit 3.
-        Transmits in 0.44 ms at 250,000 baud (< 0.5 ms per active joint).
+        Transmits in 0.48 ms at 250,000 baud (< 0.5 ms per active joint).
         """
         axis_dir = (self.joint & 0x07) | ((self.dir & 0x01) << 3)
         add_scaled = max(-128, min(127, int(self.add)))
-        return struct.pack(
+        body = struct.pack(
             "<B B I H H b",
             0x55,
             axis_dir,
@@ -72,6 +72,10 @@ class StepChunkData:
             self.interval & 0xFFFF,
             add_scaled,
         )
+        crc = 0
+        for b in body:
+            crc ^= b
+        return body + bytes([crc])
 
     def serialize_q(self) -> bytes:
         """
