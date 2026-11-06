@@ -322,6 +322,53 @@ Allows dynamic reconfiguration of direction or endstop masks from diagnostic das
 {"cmd": "SET_ENDSTOP_INVERT", "mask": 0}
 ```
 
+#### 14. Query & Configure Joint Speed Limits (`GET_SPEED_LIMITS` / `SET_SPEED_LIMITS`)
+Enforces independent maximum velocity clamping across all 6 axes to prevent stepper motor stall under high-rate streaming or aggressive operator jogging:
+```json
+{"cmd": "GET_SPEED_LIMITS"}
+```
+- **Daemon Response**:
+  ```json
+  {
+    "type": "SPEED_LIMITS",
+    "speed_limits_deg_s": [120.0, 90.0, 90.0, 150.0, 150.0, 180.0]
+  }
+  ```
+- **Set Speed Limits Command**:
+  ```json
+  {
+    "cmd": "SET_SPEED_LIMITS",
+    "speed_limits_deg_s": [100.0, 80.0, 80.0, 120.0, 120.0, 150.0]
+  }
+  ```
+- **Daemon ACK**:
+  ```json
+  {
+    "type": "ACK",
+    "cmd": "SET_SPEED_LIMITS",
+    "status": "OK",
+    "speed_limits_deg_s": [100.0, 80.0, 80.0, 120.0, 120.0, 150.0]
+  }
+  ```
+
+#### 15. Execute Staged Motion (`MOVE_TO_STAGED`)
+Dispatches physical motion to the target configuration interactively staged in the Windows Control Suite 3D Viewport (visualized by the translucent cyan ghost twin):
+```json
+{
+  "cmd": "MOVE_TO_STAGED",
+  "joints": [15.0, -80.0, 160.0, 10.0, 30.0, 180.0],
+  "speed": 0.5
+}
+```
+- **Daemon Response**:
+  ```json
+  {
+    "type": "ACK",
+    "cmd": "MOVE_TO_STAGED",
+    "status": "OK"
+  }
+  ```
+
 ---
 
 ### 4.2 Outbound Broadcast Telemetry (20 Hz)
@@ -568,3 +615,53 @@ The control ecosystem is managed on Linux (Debian 13 Trixie / Raspberry Pi OS) v
   - SCPs binaries and daemon files to the Pi (`mark@192.168.0.159`).
   - Halts services, flashes ATmega2560 via `avrdude` at 115,200 baud, verifies flash, and restarts services.
 - **Linux / Pi**: Run `bash deploy/deploy_robot.sh`.
+
+---
+
+## 9. Hybrid UDP Transport Layer & High-Frequency Streaming (Port 8766)
+
+To eliminate TCP Head-of-Line blocking and packet clumping during network jitter, the system implements a hybrid dual-transport architecture:
+- **Port 8765 (TCP / WebSocket)**: Reliable JSON RPC for discrete commands, state mutations, homing, speed limits, and staging.
+- **Port 8766 (Raw UDP)**: Unbuffered binary streaming for real-time motion (`MOVE_JOINTS`, `MOVE_CARTESIAN`, `HEARTBEAT`) and 50 Hz binary telemetry.
+
+### 9.1 Packed 39-Byte Binary Frame Layout
+Fixed-width, little-endian binary frame:
+```
+Offset   Field          Type        Description
+0        Sync Header    uint8       0xAA (Constant sync frame delimiter)
+1        Opcode         uint8       0x01 = Joints, 0x02 = Cartesian, 0x03 = Telemetry, 0x05 = Heartbeat
+2..3     Seq            uint16_le   Monotonically incrementing packet counter
+4..11    Timestamp_ns   uint64_le   Client monotonic timestamp in nanoseconds
+12..35   Payload        6x float32  Joint angles in deg (Opcode 0x01) or Cartesian pose mm/deg (Opcode 0x02)
+36       Gripper        uint8       Gripper setpoint (0–180)
+37       Flags          uint8       Bit 0 = Continuous streaming active; Bit 1 = Cartesian vs Joint
+38       CRC8           uint8       CRC-8-CCITT checksum byte (poly 0x07, init 0x00)
+```
+
+### 9.2 Host-Side Jitter Buffer (`daemon/robot_engine.py`)
+- **Capacity**: 64-slot circular ring buffer (zero runtime allocations).
+- **Target Horizon**: 60 ms nominal buffer depth.
+- **Extraction Rate**: 100 Hz deterministic extraction loop feeding kinematics and step generator.
+- **Anomaly Policies**: Out-of-order/late frames discarded, zero-velocity hold on underrun, leap-frog on overrun.
+
+---
+
+## 10. Automated Remote Hardware-In-The-Loop (HIL) Test Suite
+
+The test suite (`daemon/tools/run_hardware_tests.py`) is executable locally or remotely over SSH (`deploy/test_remote.ps1`):
+```powershell
+powershell -ExecutionPolicy Bypass -File deploy\test_remote.ps1
+```
+
+### 10.1 Test Modules:
+1. **Serial Clock Sync & Watchdog (`--test-serial`)**:
+   - Sends 100 consecutive 'P' ping frames at 250k baud; asserts RTT <3.5 ms, 0 framing errors.
+   - Stalls serial line for 300 ms; verifies Tier 2 safe state and status frame recovery.
+2. **Kinematic Verification & LM Solver Benchmark (`--test-kinematics`)**:
+   - Evaluates 50 reachable Cartesian waypoints; asserts position error <0.10 mm and average solve latency <1.5 ms on Raspberry Pi 5.
+3. **UDP Jitter Buffer Stress (`--test-streaming`)**:
+   - Injects 1,000 packed 32-byte frames at 100 Hz with ±15 ms temporal jitter; asserts uniform 100 Hz extraction with 0 queue overflows.
+4. **E-Stop & State Purge Latency (`--test-estop`)**:
+   - Populates motion queue, fires unbuffered `ESTOP`, asserts ACK latency <5.0 ms, and verifies queue depth drops to 0.
+
+Summary report is output to `/tmp/hil_test_results.json` and mirrored locally to `docs/hil_test_results.json`.

@@ -54,21 +54,31 @@ Unlike traditional CNC machines or 3D printers, modern multi-axis robotics requi
 
 ## 2. Transport Layer & Communication Protocol
 
-### 2.1 Connection Details
-- **Protocol**: Standard WebSocket (RFC 6455) over TCP.
-- **Default Port**: `8765`
-- **Default Endpoint**: `ws://<pi-ip-or-hostname>:8765` (e.g. `ws://192.168.0.159:8765`).
-- **Data Encoding**: UTF-8 encoded JSON text frames.
+### 2.1 Hybrid Dual-Transport Architecture
+The system bifurcates communication across two dedicated channels to eliminate TCP Head-of-Line blocking and ensure jitter-free motion:
+- **Channel A: Reliable TCP / WebSocket (Port 8765)**:
+  - Protocol: Standard WebSocket (RFC 6455) over TCP.
+  - Endpoint: `ws://<pi-ip-or-hostname>:8765` (e.g. `ws://192.168.0.159:8765`).
+  - Responsibilities: Discrete commands, state mutations, homing, speed limits configuration, trims persistence, and staged motion execution (`HOME`, `ESTOP`, `RESET`, `SET_GRIPPER`, `SET_TRIMS`, `MOVE_TO_STAGED`, `SET_SPEED_LIMITS`).
+- **Channel B: High-Performance Raw UDP Stream (Port 8766)**:
+  - Protocol: Connectionless, zero-allocation UDP datagram socket.
+  - Endpoint: `<pi-ip-or-hostname>:8766`
+  - Responsibilities: High-frequency motion streaming at up to 100 Hz (`MOVE_JOINTS`, `MOVE_CARTESIAN`, `HEARTBEAT`) and 50 Hz binary telemetry feedback.
+  - Packed 39-Byte Binary Frame Layout:
+    ```
+    [0xAA][Opcode: u8][Seq: u16][Timestamp_ns: u64][Payload: 6x float32 (24B)][Gripper: u8][Flags: u8][CRC8: u8]
+    ```
 
 ### 2.2 Dual-Loop Communication Architecture
 The communication between the Windows Control Suite and the daemon operates across two parallel asynchronous pipelines:
-1. **Inbound Joint Streaming & Command Pipeline (Client -> Daemon)**:
-   - High-rate continuous joint stream (`SERVO_JOINTS`) sent at **20 Hz – 50 Hz** ($\Delta t = 20\text{--}50\text{ ms}$).
-   - Trajectory buffer upload (`STREAM_TRAJECTORY`) for multi-point pre-calculated paths.
-   - Discrete management commands (`ESTOP`, `RESET`, `HOME`, `JOG_JOINT`, `SET_GRIPPER`).
+1. **Inbound Motion Streaming & Command Pipeline (Client -> Daemon)**:
+   - High-rate continuous binary joint stream sent over UDP at **100 Hz** ($\Delta t = 10\text{ ms}$).
+   - Trajectory buffer upload (`STREAM_TRAJECTORY`) for multi-point pre-calculated paths over TCP.
+   - Discrete management commands (`ESTOP`, `RESET`, `HOME`, `JOG_JOINT`, `SET_GRIPPER`, `MOVE_TO_STAGED`).
 2. **Outbound Streaming Telemetry Feed (Daemon -> Client)**:
-   - Continuous broadcast stream transmitted every **50 milliseconds (20 Hz)**.
+   - Continuous broadcast stream transmitted every **50 milliseconds (20 Hz)** over WebSocket, and binary telemetry at **50 Hz** over UDP.
    - Contains live joint angles, FK Cartesian TCP pose, endstop states, buffer fullness, and hardware flags.
+   - Live jitter metrics: TCP RTT, UDP RTT, Exponential Moving Average (EMA) Jitter, and Packet Loss %.
 
 ---
 
