@@ -126,10 +126,45 @@ class OneEuroFilter6D:
     def filter(self, values: List[float], dt_s: float) -> List[float]:
         if len(values) != 6:
             return list(values)
-        return [
-            self.filters[i].filter(values[i], dt_s)
-            for i in range(6)
-        ]
+        dt_s = max(1e-4, float(dt_s))
+
+        # 1. Update derivatives for all 6 axes and find peak coordinated speed
+        alpha_d = OneEuroFilter._compute_alpha(self.d_cutoff, dt_s)
+        max_dx = 0.0
+        first_sample = False
+
+        for i in range(6):
+            f = self.filters[i]
+            x = float(values[i])
+            if f.last_raw_x is None:
+                f.last_raw_x = x
+                f.last_filtered_x = x
+                f.last_dx = 0.0
+                f.x_filt.reset(x)
+                f.dx_filt.reset(0.0)
+                first_sample = True
+            else:
+                raw_dx = (x - f.last_raw_x) / dt_s
+                f.last_raw_x = x
+                dx_hat = f.dx_filt.filter(raw_dx, alpha_d)
+                f.last_dx = dx_hat
+                if abs(dx_hat) > max_dx:
+                    max_dx = abs(dx_hat)
+
+        if first_sample:
+            return [float(v) for v in values]
+
+        # 2. Shared adaptive cutoff across all 6 axes prevents inter-joint phase lag skew
+        shared_cutoff = self.min_cutoff + self.beta * max_dx
+        shared_alpha = OneEuroFilter._compute_alpha(shared_cutoff, dt_s)
+
+        out = []
+        for i in range(6):
+            f = self.filters[i]
+            x_hat = f.x_filt.filter(float(values[i]), shared_alpha)
+            f.last_filtered_x = x_hat
+            out.append(x_hat)
+        return out
 
     def get_derivatives(self) -> List[float]:
         """Return the estimated filtered joint velocities (deg/s)."""

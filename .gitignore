@@ -4,4 +4,9 @@ __pycache__/
 .vscode/
 .idea/
 *.tmp
+*.log
+bin/
+obj/
+Windows_ControlSuite/bin/
+Windows_ControlSuite/obj/
 klipper-master_git_clone/

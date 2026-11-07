@@ -2,92 +2,101 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-  <title>PAROL6 Robotics Controller & Diagnostics</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, maximum-scale=1.0">
+  <title>PAROL6 Kiosk Touch UI</title>
   <style>
     :root {
-      --bg: #090b10;
-      --card-bg: #141721;
-      --card-border: #222738;
-      --accent: #00f0ff;
-      --accent-glow: rgba(0, 240, 255, 0.25);
-      --red: #ff2a4b;
-      --red-glow: rgba(255, 42, 75, 0.4);
+      --bg: #0a0c10;
+      --card-bg: #121620;
+      --card-border: #1e2638;
+      --text: #f0f3f6;
+      --text-dim: #7d889b;
+      --accent: #00d2ff;
+      --accent-dark: #007799;
       --green: #10b981;
-      --green-glow: rgba(16, 185, 129, 0.3);
+      --green-dark: #064e3b;
+      --red: #ef4444;
+      --red-dark: #7f1d1d;
       --amber: #f59e0b;
-      --text: #f3f4f6;
-      --text-dim: #9ca3af;
-      --touch-size: 56px;
+      --yellow: #eab308;
+      --blue: #2563eb;
+      --purple: #8b5cf6;
     }
 
     * {
       box-sizing: border-box;
       margin: 0;
       padding: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen, Ubuntu, Cantarell, "Helvetica Neue", sans-serif;
       user-select: none;
       -webkit-user-select: none;
       touch-action: manipulation;
+      -webkit-tap-highlight-color: transparent;
     }
 
     body {
-      background-color: var(--bg);
+      background: var(--bg);
       color: var(--text);
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-      height: 100vh;
-      width: 100vw;
-      overflow: hidden;
       display: flex;
       flex-direction: column;
+      height: 100vh;
+      overflow: hidden;
     }
 
-    /* HEADER */
+    /* TOP HEADER */
     header {
-      background: #10131c;
-      border-bottom: 2px solid var(--card-border);
-      height: 64px;
-      padding: 0 16px;
       display: flex;
-      align-items: center;
       justify-content: space-between;
+      align-items: center;
+      padding: 8px 14px;
+      background: #11141d;
+      border-bottom: 2px solid var(--card-border);
       flex-shrink: 0;
+      min-height: 58px;
     }
 
     .brand {
       display: flex;
       align-items: center;
-      gap: 10px;
+      gap: 12px;
     }
 
-    .brand h1 {
-      font-size: 20px;
-      font-weight: 800;
+    .brand-title {
+      font-size: 19px;
+      font-weight: 900;
       letter-spacing: 1.5px;
       color: var(--accent);
-      text-transform: uppercase;
+      text-shadow: 0 0 10px rgba(0, 210, 255, 0.3);
+    }
+
+    .brand-sub {
+      font-size: 10px;
+      font-weight: 800;
+      background: #1e2638;
+      color: var(--green);
+      padding: 3px 6px;
+      border-radius: 4px;
+      letter-spacing: 0.5px;
     }
 
     .badges {
       display: flex;
-      align-items: center;
-      gap: 8px;
+      gap: 6px;
     }
 
     .status-badge {
-      padding: 4px 10px;
-      border-radius: 20px;
+      padding: 5px 10px;
+      border-radius: 999px;
       font-size: 11px;
-      font-weight: 700;
-      text-transform: uppercase;
-      letter-spacing: 1px;
+      font-weight: 800;
       display: flex;
       align-items: center;
       gap: 6px;
-      cursor: pointer;
     }
 
     .status-badge::before {
       content: '';
+      display: inline-block;
       width: 8px;
       height: 8px;
       border-radius: 50%;
@@ -96,175 +105,317 @@
     .status-online {
       background: rgba(16, 185, 129, 0.15);
       color: var(--green);
-      border: 1px solid var(--green);
+      border: 1px solid rgba(16, 185, 129, 0.4);
     }
     .status-online::before { background: var(--green); box-shadow: 0 0 8px var(--green); }
 
     .status-offline {
-      background: rgba(255, 42, 75, 0.15);
+      background: rgba(239, 68, 68, 0.15);
       color: var(--red);
-      border: 1px solid var(--red);
+      border: 1px solid rgba(239, 68, 68, 0.4);
     }
     .status-offline::before { background: var(--red); box-shadow: 0 0 8px var(--red); }
 
     .status-amber {
       background: rgba(245, 158, 11, 0.15);
       color: var(--amber);
-      border: 1px solid var(--amber);
+      border: 1px solid rgba(245, 158, 11, 0.4);
     }
     .status-amber::before { background: var(--amber); box-shadow: 0 0 8px var(--amber); }
 
-    /* GIANT E-STOP BUTTON */
-    .btn-estop {
-      background: linear-gradient(180deg, #ff416c 0%, #ff4b2b 100%);
-      color: white;
-      font-size: 16px;
-      font-weight: 900;
-      letter-spacing: 1.5px;
-      padding: 0 24px;
-      height: 48px;
-      border: none;
-      border-radius: 8px;
-      box-shadow: 0 0 20px var(--red-glow);
-      cursor: pointer;
+    .header-actions {
       display: flex;
       align-items: center;
       gap: 8px;
-      transition: transform 0.05s ease, filter 0.05s ease;
     }
 
-    .btn-estop:active {
+    .btn-top-home {
+      background: #1e3a8a;
+      border: 2px solid #3b82f6;
+      color: #fff;
+      font-size: 14px;
+      font-weight: 900;
+      padding: 8px 16px;
+      border-radius: 8px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      min-height: 48px;
+      transition: all 0.1s ease;
+    }
+    .btn-top-home:active {
       transform: scale(0.96);
-      filter: brightness(1.2);
+      background: #2563eb;
     }
 
-    /* TELEMETRY BAR */
-    .telemetry-bar {
+    .btn-estop {
+      background: var(--red);
+      color: #fff;
+      border: 2px solid #dc2626;
+      padding: 8px 18px;
+      border-radius: 8px;
+      font-weight: 900;
+      font-size: 14px;
+      letter-spacing: 0.5px;
+      cursor: pointer;
+      min-height: 48px;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      box-shadow: 0 0 14px rgba(239, 68, 68, 0.45);
+      transition: transform 0.1s;
+    }
+    .btn-estop:active {
+      transform: scale(0.95);
+      box-shadow: 0 0 24px rgba(239, 68, 68, 0.8);
+    }
+
+    /* TELEMETRY & POSE BAR */
+    .telemetry-strip {
       background: #0d1017;
       border-bottom: 1px solid var(--card-border);
-      padding: 6px 16px;
+      padding: 6px 14px;
       display: flex;
+      flex-wrap: wrap;
       justify-content: space-between;
+      align-items: center;
       font-size: 11px;
-      font-weight: 600;
-      color: var(--text-dim);
+      font-weight: 700;
       flex-shrink: 0;
-    }
-
-    .telemetry-item {
-      display: flex;
       gap: 6px;
     }
 
-    .telemetry-val {
-      color: var(--text);
-      font-family: monospace;
-      font-weight: 700;
+    .telemetry-group {
+      display: flex;
+      align-items: center;
+      gap: 12px;
     }
 
-    /* NAVIGATION TABS */
-    .tab-bar {
+    .telem-label {
+      color: var(--text-dim);
+    }
+
+    .telem-val {
+      font-family: ui-monospace, Consolas, monospace;
+      color: var(--text);
+      font-weight: 800;
+    }
+
+    .pose-chip {
+      background: #161b26;
+      border: 1px solid var(--card-border);
+      border-radius: 6px;
+      padding: 3px 8px;
+      font-family: ui-monospace, Consolas, monospace;
+      font-size: 11px;
+    }
+
+    /* TAB NAVIGATION */
+    .tab-nav {
       display: flex;
-      background: #10131c;
+      background: #11141d;
       border-bottom: 2px solid var(--card-border);
       flex-shrink: 0;
     }
 
     .tab-btn {
       flex: 1;
-      height: 48px;
+      min-height: 48px;
       background: transparent;
       border: none;
+      border-bottom: 3px solid transparent;
       color: var(--text-dim);
       font-size: 13px;
-      font-weight: 700;
-      letter-spacing: 0.5px;
+      font-weight: 800;
       cursor: pointer;
-      border-bottom: 3px solid transparent;
-      transition: all 0.15s ease;
       display: flex;
       align-items: center;
       justify-content: center;
-      gap: 6px;
+      gap: 8px;
+      transition: all 0.15s ease;
     }
-
     .tab-btn.active {
-      color: var(--accent);
+      color: #fff;
       border-bottom-color: var(--accent);
-      background: rgba(0, 240, 255, 0.05);
+      background: rgba(0, 210, 255, 0.08);
+    }
+    .tab-btn:active {
+      background: rgba(0, 210, 255, 0.14);
     }
 
-    /* MAIN VIEW CONTAINER */
+    /* MAIN CONTENT VIEW */
     main {
       flex: 1;
       overflow-y: auto;
-      padding: 12px;
-      display: flex;
-      flex-direction: column;
+      padding: 10px;
+      position: relative;
     }
 
     .tab-pane {
       display: none;
-      flex: 1;
-      flex-direction: column;
-      gap: 12px;
+      height: 100%;
     }
-
     .tab-pane.active {
       display: flex;
+      flex-direction: column;
+      gap: 10px;
     }
 
-    /* STEP SELECTOR */
-    .step-bar {
+    /* UNHOMED BANNER */
+    .unhomed-banner {
+      background: #78350f;
+      border: 1px solid var(--amber);
+      color: #fef3c7;
+      padding: 8px 12px;
+      border-radius: 8px;
       display: flex;
       align-items: center;
       justify-content: space-between;
+      font-size: 12px;
+      font-weight: 800;
+      flex-shrink: 0;
+    }
+    .unhomed-banner button {
+      background: var(--amber);
+      color: #000;
+      border: none;
+      padding: 6px 12px;
+      border-radius: 6px;
+      font-weight: 900;
+      font-size: 11px;
+      cursor: pointer;
+      min-height: 32px;
+    }
+
+    /* STEP SELECTOR BAR */
+    .step-bar {
+      display: flex;
+      align-items: center;
       background: var(--card-bg);
       border: 1px solid var(--card-border);
       border-radius: 8px;
-      padding: 6px 12px;
+      padding: 4px;
+      gap: 4px;
       flex-shrink: 0;
     }
 
-    .step-label {
-      font-size: 12px;
-      font-weight: 700;
+    .step-bar-label {
+      font-size: 11px;
+      font-weight: 800;
       color: var(--text-dim);
-      text-transform: uppercase;
+      padding: 0 8px;
     }
 
-    .step-options {
+    .step-btn {
+      flex: 1;
+      min-height: 42px;
+      background: transparent;
+      border: 1px solid transparent;
+      border-radius: 6px;
+      color: var(--text-dim);
+      font-size: 13px;
+      font-weight: 800;
+      font-family: ui-monospace, Consolas, monospace;
+      cursor: pointer;
+      transition: all 0.1s ease;
+    }
+    .step-btn.active {
+      background: var(--accent-dark);
+      border-color: var(--accent);
+      color: #fff;
+      box-shadow: 0 0 8px rgba(0, 210, 255, 0.3);
+    }
+    .step-btn:active {
+      transform: scale(0.96);
+    }
+
+    /* 6 JOINT CARDS GRID */
+    .joint-grid {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 8px;
+      flex: 1;
+    }
+    @media (min-width: 900px) {
+      .joint-grid {
+        grid-template-columns: repeat(3, 1fr);
+      }
+    }
+
+    .joint-card {
+      background: var(--card-bg);
+      border: 1px solid var(--card-border);
+      border-radius: 8px;
+      padding: 8px 10px;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      gap: 6px;
+    }
+
+    .joint-card-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .joint-name {
+      font-size: 13px;
+      font-weight: 800;
+      color: var(--accent);
+    }
+
+    .joint-deg-readout {
+      font-family: ui-monospace, Consolas, monospace;
+      font-size: 14px;
+      font-weight: 900;
+      color: #fff;
+    }
+
+    .joint-bar-track {
+      background: #1a2233;
+      height: 4px;
+      border-radius: 2px;
+      overflow: hidden;
+      width: 100%;
+    }
+    .joint-bar-fill {
+      background: var(--accent);
+      height: 100%;
+      width: 50%;
+      transition: width 0.1s linear;
+    }
+
+    .joint-jog-controls {
       display: flex;
       gap: 6px;
     }
 
-    .step-opt-btn {
-      background: #1c2130;
-      color: var(--text);
-      border: 1px solid var(--card-border);
-      border-radius: 6px;
-      padding: 6px 14px;
-      font-size: 12px;
-      font-weight: 700;
-      cursor: pointer;
-    }
-
-    .step-opt-btn.active {
-      background: var(--accent);
-      color: #090b10;
-      border-color: var(--accent);
-      box-shadow: 0 0 10px var(--accent-glow);
-    }
-
-    /* JOINT JOG GRID */
-    .joint-grid {
-      display: grid;
-      grid-template-columns: repeat(2, 1fr);
-      gap: 10px;
+    .btn-jog {
       flex: 1;
+      min-height: 48px;
+      background: #1a2336;
+      border: 1px solid #2a3754;
+      border-radius: 8px;
+      color: #fff;
+      font-size: 18px;
+      font-weight: 900;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: all 0.08s ease;
+    }
+    .btn-jog:active {
+      background: var(--accent);
+      color: #000;
+      transform: scale(0.96);
+      box-shadow: 0 0 12px var(--accent);
     }
 
-    .joint-card {
+    /* GRIPPER PANEL */
+    .gripper-strip {
       background: var(--card-bg);
       border: 1px solid var(--card-border);
       border-radius: 8px;
@@ -272,840 +423,584 @@
       display: flex;
       align-items: center;
       justify-content: space-between;
+      gap: 12px;
+      flex-shrink: 0;
     }
 
-    .joint-info {
-      display: flex;
-      flex-direction: column;
-    }
-
-    .joint-name {
-      font-size: 13px;
-      font-weight: 700;
-      color: var(--text-dim);
-    }
-
-    .joint-angle {
-      font-size: 18px;
+    .gripper-title {
+      font-size: 12px;
       font-weight: 800;
-      font-family: monospace;
-      color: var(--accent);
-    }
-
-    .joint-controls {
+      color: var(--amber);
       display: flex;
-      gap: 8px;
+      align-items: center;
+      gap: 6px;
+      min-width: 130px;
     }
 
-    .btn-jog {
-      width: var(--touch-size);
-      height: var(--touch-size);
-      background: #1c2130;
-      color: var(--text);
-      border: 1px solid var(--card-border);
+    .gripper-slider {
+      flex: 1;
+      height: 28px;
+      accent-color: var(--amber);
+    }
+
+    .gripper-quick-btns {
+      display: flex;
+      gap: 6px;
+    }
+
+    .btn-grip {
+      min-height: 42px;
+      padding: 0 12px;
+      background: #1e2638;
+      border: 1px solid #2f3b54;
+      border-radius: 6px;
+      color: #fff;
+      font-size: 11px;
+      font-weight: 800;
+      cursor: pointer;
+      transition: all 0.1s ease;
+    }
+    .btn-grip:active {
+      background: var(--amber);
+      color: #000;
+      transform: scale(0.96);
+    }
+
+    /* CARTESIAN JOG VIEW */
+    .cartesian-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 8px;
+      margin-bottom: 8px;
+    }
+
+    .cart-btn {
+      min-height: 52px;
       border-radius: 8px;
-      font-size: 22px;
+      font-size: 16px;
       font-weight: 900;
       cursor: pointer;
       display: flex;
       align-items: center;
       justify-content: center;
-      transition: all 0.05s ease;
+      color: #fff;
+      transition: all 0.08s ease;
     }
-
-    .btn-jog:active {
-      background: var(--accent);
-      color: #090b10;
+    .cart-btn:active {
       transform: scale(0.95);
     }
 
-    /* CARTESIAN & PRESETS */
-    .cartesian-box {
+    .cart-x { background: #881b24; border: 1px solid #dc2626; }
+    .cart-x:active { background: #ef4444; color: #fff; box-shadow: 0 0 14px #ef4444; }
+
+    .cart-y { background: #064e3b; border: 1px solid #10b981; }
+    .cart-y:active { background: #10b981; color: #000; box-shadow: 0 0 14px #10b981; }
+
+    .cart-z { background: #1e3a8a; border: 1px solid #3b82f6; }
+    .cart-z:active { background: #3b82f6; color: #fff; box-shadow: 0 0 14px #3b82f6; }
+
+    .cart-rot { background: #312e81; border: 1px solid #6366f1; }
+    .cart-rot:active { background: #818cf8; color: #000; box-shadow: 0 0 14px #818cf8; }
+
+    /* SETTINGS CARDS */
+    .settings-list {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      overflow-y: auto;
+    }
+
+    .settings-box {
       background: var(--card-bg);
       border: 1px solid var(--card-border);
       border-radius: 8px;
-      padding: 12px;
-      display: flex;
-      flex-direction: column;
-      gap: 10px;
+      padding: 12px 14px;
     }
 
-    .cartesian-title {
-      font-size: 12px;
-      font-weight: 700;
-      color: var(--text-dim);
-      text-transform: uppercase;
-    }
-
-    .cartesian-readout {
-      display: grid;
-      grid-template-columns: repeat(6, 1fr);
-      gap: 6px;
-      font-family: monospace;
+    .settings-box h3 {
       font-size: 13px;
-      text-align: center;
+      font-weight: 800;
+      color: var(--accent);
+      margin-bottom: 10px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
     }
 
-    .cartesian-val {
-      background: #090b10;
-      padding: 6px;
-      border-radius: 4px;
-      border: 1px solid var(--card-border);
-      font-weight: 700;
+    .trims-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 12px;
+    }
+    .trims-table th {
+      text-align: left;
+      color: var(--text-dim);
+      padding: 6px 8px;
+      border-bottom: 1px solid var(--card-border);
+      font-size: 11px;
+    }
+    .trims-table td {
+      padding: 6px 8px;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+    }
+    .trim-val {
+      font-family: ui-monospace, Consolas, monospace;
+      font-weight: 800;
       color: var(--accent);
     }
 
-    .cartesian-controls-grid {
-      display: grid;
-      grid-template-columns: repeat(3, 1fr);
-      gap: 10px;
-    }
-
-    .preset-grid {
-      display: grid;
-      grid-template-columns: repeat(2, 1fr);
-      gap: 10px;
-    }
-
-    .btn-action {
-      height: 48px;
-      background: #1c2130;
-      color: var(--text);
-      border: 1px solid var(--card-border);
-      border-radius: 8px;
-      font-size: 13px;
-      font-weight: 700;
+    .btn-nudge {
+      min-height: 38px;
+      min-width: 44px;
+      background: #1a2336;
+      border: 1px solid #2a3754;
+      border-radius: 6px;
+      color: #fff;
+      font-weight: 800;
       cursor: pointer;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      gap: 8px;
+      margin: 0 2px;
     }
-
-    .btn-action:active {
+    .btn-nudge:active {
       background: var(--accent);
-      color: #090b10;
+      color: #000;
       transform: scale(0.96);
     }
 
-    .btn-action-primary {
-      background: #047857;
-      border-color: #059669;
-      color: white;
-    }
-
-    .btn-action-warn {
-      background: #b45309;
-      border-color: #d97706;
-      color: white;
-    }
-
-    /* ENDSTOP MATRIX CARDS */
-    .endstop-matrix {
-      display: grid;
-      grid-template-columns: repeat(3, 1fr);
-      gap: 8px;
-    }
-
-    .endstop-card {
-      background: #0d1017;
-      border: 1px solid var(--card-border);
-      border-radius: 6px;
-      padding: 8px;
-      display: flex;
-      flex-direction: column;
-      gap: 4px;
-    }
-
-    .endstop-header {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      font-size: 11px;
-      font-weight: 700;
-    }
-
-    .endstop-pill {
-      padding: 2px 8px;
-      border-radius: 10px;
-      font-size: 10px;
-      font-weight: 800;
-    }
-
-    .endstop-open {
-      background: rgba(16, 185, 129, 0.2);
-      color: var(--green);
-      border: 1px solid var(--green);
-    }
-
-    .endstop-triggered {
-      background: rgba(255, 42, 75, 0.25);
-      color: var(--red);
-      border: 1px solid var(--red);
-      box-shadow: 0 0 8px var(--red-glow);
-    }
-
-    /* MANUAL STEPPING CONTROLS */
-    .manual-step-grid {
-      display: grid;
-      grid-template-columns: repeat(2, 1fr);
-      gap: 8px;
-    }
-
-    .diag-joint-box {
-      background: #0d1017;
-      border: 1px solid var(--card-border);
-      border-radius: 6px;
-      padding: 8px;
-      display: flex;
-      flex-direction: column;
-      gap: 6px;
-    }
-
-    .diag-btn-row {
-      display: flex;
-      gap: 4px;
-    }
-
-    .btn-step {
-      flex: 1;
-      height: 38px;
-      background: #1c2130;
-      color: var(--text);
-      border: 1px solid var(--card-border);
-      border-radius: 4px;
-      font-size: 11px;
-      font-weight: 700;
+    .btn-maintenance {
+      min-height: 48px;
+      border-radius: 8px;
+      font-size: 13px;
+      font-weight: 900;
       cursor: pointer;
+      border: 1px solid transparent;
+      padding: 0 14px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      transition: all 0.1s ease;
     }
-
-    .btn-step:active {
-      background: var(--accent);
-      color: #090b10;
+    .btn-maintenance:active {
+      transform: scale(0.96);
     }
+    .btn-maint-primary { background: #007799; border-color: var(--accent); color: #fff; }
+    .btn-maint-green { background: #064e3b; border-color: var(--green); color: #fff; }
+    .btn-maint-warn { background: #7f1d1d; border-color: var(--red); color: #fff; }
 
-    /* FULLSCREEN E-STOP OVERLAY */
-    #estop-overlay {
-      position: fixed;
-      inset: 0;
-      background: rgba(9, 11, 16, 0.95);
-      backdrop-filter: blur(8px);
-      z-index: 9999;
+    /* E-STOP PULSING OVERLAY */
+    .estop-modal {
       display: none;
+      position: fixed;
+      top: 0; left: 0; right: 0; bottom: 0;
+      background: rgba(183, 28, 28, 0.85);
+      z-index: 9999;
       flex-direction: column;
       align-items: center;
       justify-content: center;
       gap: 20px;
-      padding: 20px;
+      padding: 24px;
       text-align: center;
+      animation: estop-pulse 1.2s infinite ease-in-out;
     }
 
-    #estop-overlay h2 {
-      font-size: 28px;
+    @keyframes estop-pulse {
+      0% { background: rgba(127, 29, 29, 0.88); }
+      50% { background: rgba(220, 38, 38, 0.94); box-shadow: inset 0 0 60px #ff1744; }
+      100% { background: rgba(127, 29, 29, 0.88); }
+    }
+
+    .estop-modal h2 {
+      font-size: 32px;
       font-weight: 900;
-      color: var(--red);
+      color: #fff;
       letter-spacing: 2px;
+      text-shadow: 0 0 20px rgba(0, 0, 0, 0.8);
     }
 
-    #estop-overlay p {
-      font-size: 14px;
-      color: var(--text-dim);
-      max-width: 480px;
+    .estop-modal p {
+      font-size: 15px;
+      color: #fee2e2;
+      max-width: 500px;
+      font-weight: 700;
     }
 
-    .btn-reset {
-      background: var(--green);
-      color: #090b10;
-      font-size: 16px;
+    .estop-recovery-actions {
+      display: flex;
+      gap: 14px;
+      flex-wrap: wrap;
+      justify-content: center;
+    }
+
+    .btn-recovery {
+      min-height: 56px;
+      padding: 0 24px;
+      border-radius: 10px;
+      font-size: 15px;
       font-weight: 900;
-      letter-spacing: 1px;
-      padding: 16px 36px;
-      border: none;
-      border-radius: 8px;
-      box-shadow: 0 0 24px var(--green-glow);
       cursor: pointer;
+      border: 2px solid #fff;
+      box-shadow: 0 6px 20px rgba(0, 0, 0, 0.5);
+      transition: transform 0.1s;
     }
-
-    .btn-reset:active {
+    .btn-recovery:active {
       transform: scale(0.96);
     }
+    .btn-rec-reset { background: #fff; color: #b91c1c; }
+    .btn-rec-home { background: #1e3a8a; color: #fff; border-color: #60a5fa; }
   </style>
 </head>
 <body>
 
-  <!-- HEADER -->
+  <!-- TOP HEADER -->
   <header>
     <div class="brand">
-      <h1>PAROL6</h1>
+      <div class="brand-title">PAROL6</div>
+      <div class="brand-sub">6-AXIS CORE</div>
       <div class="badges">
         <div id="ws-badge" class="status-badge status-offline">WS: Offline</div>
-        <div id="mcu-badge" class="status-badge status-offline" onclick="sendCmd({cmd:'RECONNECT_MCU'})">MCU: Disconnected</div>
+        <div id="mcu-badge" class="status-badge status-offline">Klipper: Offline</div>
       </div>
     </div>
-    <button class="btn-estop" id="btn-estop">
-      🛑 EMERGENCY STOP
-    </button>
+    <div class="header-actions">
+      <button class="btn-top-home" id="btn-top-home" onclick="triggerHoming()">
+        🏠 HOME ALL
+      </button>
+      <button class="btn-estop" id="btn-estop" onclick="sendCmd({cmd:'ESTOP'})">
+        🛑 EMERGENCY STOP
+      </button>
+    </div>
   </header>
 
-  <!-- LIVE TELEMETRY BAR -->
-  <div class="telemetry-bar">
-    <div class="telemetry-item">STATE: <span id="telem-state" class="telemetry-val">IDLE</span></div>
-    <div class="telemetry-item">STREAM: <span id="telem-stream" class="telemetry-val" style="color:var(--text-dim);">IDLE</span></div>
-    <div class="telemetry-item">RTT: <span id="telem-rtt" class="telemetry-val">--</span> ms</div>
-    <div class="telemetry-item">HOMED: <span id="telem-homed" class="telemetry-val">NO</span></div>
-    <div class="telemetry-item">GRIPPER: <span id="telem-grip" class="telemetry-val">62.5</span> mm</div>
-    <div class="telemetry-item">MCU CLOCK: <span id="telem-clock" class="telemetry-val">--</span></div>
+  <!-- LIVE TELEMETRY & POSE BAR -->
+  <div class="telemetry-strip">
+    <div class="telemetry-group">
+      <div><span class="telem-label">STATE:</span> <span id="telem-state" class="telem-val">IDLE</span></div>
+      <div><span class="telem-label">HOMED:</span> <span id="telem-homed" class="telem-val" style="color:var(--amber);">NO</span></div>
+      <div><span class="telem-label">STREAM:</span> <span id="telem-stream" class="telem-val">IDLE</span></div>
+      <div><span class="telem-label">RTT:</span> <span id="telem-rtt" class="telem-val">-- ms</span></div>
+      <div><span class="telem-label">JITTER:</span> <span id="telem-jitter" class="telem-val">±0.0 ms</span></div>
+    </div>
+    <div class="telemetry-group">
+      <div class="pose-chip">TCP: X:<span id="pose-x">0.0</span> Y:<span id="pose-y">0.0</span> Z:<span id="pose-z">0.0</span> mm</div>
+      <div class="pose-chip">ROT: R:<span id="pose-r">0.0</span>° P:<span id="pose-p">0.0</span>° Y:<span id="pose-yaw">0.0</span>°</div>
+    </div>
   </div>
 
   <!-- NAVIGATION TABS -->
-  <nav class="tab-bar">
-    <button class="tab-btn active" data-tab="tab-joints">🤖 Joint Jog</button>
-    <button class="tab-btn" data-tab="tab-cartesian">🎯 Cartesian</button>
-    <button class="tab-btn" data-tab="tab-presets">📦 Presets & Gripper</button>
-    <button class="tab-btn" data-tab="tab-calibration">📐 Homing Calibration</button>
-    <button class="tab-btn" data-tab="tab-diagnostics">🛠️ Diagnostics & Direct Jog</button>
+  <nav class="tab-nav">
+    <button class="tab-btn active" data-tab="tab-joints">🤖 Joint Jogging</button>
+    <button class="tab-btn" data-tab="tab-cartesian">🧭 Cartesian Jogging</button>
+    <button class="tab-btn" data-tab="tab-settings">⚙️ Settings &amp; Trims</button>
+    <button class="tab-btn" data-tab="tab-logs" id="tab-btn-logs">📡 RX/TX Logs <span id="log-err-dot" style="display:none; background:var(--red); color:#fff; border-radius:999px; padding:1px 6px; font-size:10px;">!</span></button>
   </nav>
 
   <!-- MAIN VIEWS -->
   <main>
     <!-- TAB 1: JOINT JOGGING -->
     <section id="tab-joints" class="tab-pane active">
-      <!-- Unhomed Warning Banner -->
-      <div id="unhomed-alert-banner" style="display:flex; align-items:center; justify-content:space-between; background:rgba(245, 158, 11, 0.15); border:1px solid var(--amber); border-radius:8px; padding:10px 14px; margin-bottom:12px; color:var(--amber); font-size:12px; font-weight:600;">
-        <span>⚠️ Arm Not Homed: Homing is required before joint streaming or jogging is enabled.</span>
-        <button style="background:var(--amber); color:#090b10; border:none; padding:6px 14px; border-radius:6px; font-weight:800; cursor:pointer;" onclick="sendCmd({cmd:'HOME', joint:'ALL'})">HOME ALL NOW</button>
+      <div id="unhomed-alert-banner" class="unhomed-banner" style="display:none;">
+        <span>⚠️ Arm Unhomed: Run sequential collision-avoidance homing before commanding motion.</span>
+        <button onclick="triggerHoming()">HOME ALL NOW</button>
       </div>
 
+      <!-- Joint Step Size Bar -->
       <div class="step-bar">
-        <span class="step-label">Increment:</span>
-        <div class="step-options" id="joint-step-selector">
-          <button class="step-opt-btn" data-val="0.5">0.5°</button>
-          <button class="step-opt-btn" data-val="1.0">1.0°</button>
-          <button class="step-opt-btn active" data-val="5.0">5.0°</button>
-          <button class="step-opt-btn" data-val="10.0">10°</button>
-          <button class="step-opt-btn" data-val="30.0">30°</button>
-        </div>
+        <span class="step-bar-label">Step:</span>
+        <button class="step-btn" data-step="0.1">0.1°</button>
+        <button class="step-btn" data-step="1.0">1.0°</button>
+        <button class="step-btn active" data-step="5.0">5.0°</button>
+        <button class="step-btn" data-step="10.0">10.0°</button>
+        <button class="step-btn" data-step="20.0">20.0°</button>
       </div>
 
+      <!-- 6 Joint Cards -->
       <div class="joint-grid">
+        <!-- Joint 1 -->
         <div class="joint-card">
-          <div class="joint-info">
-            <span class="joint-name">J1 Base Yaw</span>
-            <span class="joint-angle" id="ang-j1">0.00°</span>
+          <div class="joint-card-header">
+            <span class="joint-name">J1 Base Yaw (X)</span>
+            <span class="joint-deg-readout" id="ang-j1">0.00°</span>
           </div>
-          <div class="joint-controls">
-            <button class="btn-jog" data-joint="1" data-dir="-1">-</button>
-            <button class="btn-jog" data-joint="1" data-dir="1">+</button>
+          <div class="joint-bar-track"><div id="bar-j1" class="joint-bar-fill"></div></div>
+          <div class="joint-jog-controls">
+            <button class="btn-jog" onclick="jogJoint(1, -1)">◀ -</button>
+            <button class="btn-jog" onclick="jogJoint(1, 1)">+ ▶</button>
           </div>
         </div>
 
+        <!-- Joint 2 -->
         <div class="joint-card">
-          <div class="joint-info">
-            <span class="joint-name">J2 Shoulder</span>
-            <span class="joint-angle" id="ang-j2">-90.00°</span>
+          <div class="joint-card-header">
+            <span class="joint-name">J2 Shoulder Pitch (Y)</span>
+            <span class="joint-deg-readout" id="ang-j2">-90.00°</span>
           </div>
-          <div class="joint-controls">
-            <button class="btn-jog" data-joint="2" data-dir="-1">-</button>
-            <button class="btn-jog" data-joint="2" data-dir="1">+</button>
+          <div class="joint-bar-track"><div id="bar-j2" class="joint-bar-fill"></div></div>
+          <div class="joint-jog-controls">
+            <button class="btn-jog" onclick="jogJoint(2, -1)">◀ -</button>
+            <button class="btn-jog" onclick="jogJoint(2, 1)">+ ▶</button>
           </div>
         </div>
 
+        <!-- Joint 3 -->
         <div class="joint-card">
-          <div class="joint-info">
-            <span class="joint-name">J3 Elbow</span>
-            <span class="joint-angle" id="ang-j3">180.00°</span>
+          <div class="joint-card-header">
+            <span class="joint-name">J3 Elbow Pitch (Z)</span>
+            <span class="joint-deg-readout" id="ang-j3">180.00°</span>
           </div>
-          <div class="joint-controls">
-            <button class="btn-jog" data-joint="3" data-dir="-1">-</button>
-            <button class="btn-jog" data-joint="3" data-dir="1">+</button>
+          <div class="joint-bar-track"><div id="bar-j3" class="joint-bar-fill"></div></div>
+          <div class="joint-jog-controls">
+            <button class="btn-jog" onclick="jogJoint(3, -1)">◀ -</button>
+            <button class="btn-jog" onclick="jogJoint(3, 1)">+ ▶</button>
           </div>
         </div>
 
+        <!-- Joint 4 -->
         <div class="joint-card">
-          <div class="joint-info">
-            <span class="joint-name">J4 Forearm</span>
-            <span class="joint-angle" id="ang-j4">0.00°</span>
+          <div class="joint-card-header">
+            <span class="joint-name">J4 Forearm Roll (A)</span>
+            <span class="joint-deg-readout" id="ang-j4">0.00°</span>
           </div>
-          <div class="joint-controls">
-            <button class="btn-jog" data-joint="4" data-dir="-1">-</button>
-            <button class="btn-jog" data-joint="4" data-dir="1">+</button>
+          <div class="joint-bar-track"><div id="bar-j4" class="joint-bar-fill"></div></div>
+          <div class="joint-jog-controls">
+            <button class="btn-jog" onclick="jogJoint(4, -1)">◀ -</button>
+            <button class="btn-jog" onclick="jogJoint(4, 1)">+ ▶</button>
           </div>
         </div>
 
+        <!-- Joint 5 -->
         <div class="joint-card">
-          <div class="joint-info">
-            <span class="joint-name">J5 Wrist Pitch</span>
-            <span class="joint-angle" id="ang-j5">0.00°</span>
+          <div class="joint-card-header">
+            <span class="joint-name">J5 Wrist Pitch (B)</span>
+            <span class="joint-deg-readout" id="ang-j5">0.00°</span>
           </div>
-          <div class="joint-controls">
-            <button class="btn-jog" data-joint="5" data-dir="-1">-</button>
-            <button class="btn-jog" data-joint="5" data-dir="1">+</button>
+          <div class="joint-bar-track"><div id="bar-j5" class="joint-bar-fill"></div></div>
+          <div class="joint-jog-controls">
+            <button class="btn-jog" onclick="jogJoint(5, -1)">◀ -</button>
+            <button class="btn-jog" onclick="jogJoint(5, 1)">+ ▶</button>
           </div>
         </div>
 
+        <!-- Joint 6 -->
         <div class="joint-card">
-          <div class="joint-info">
-            <span class="joint-name">J6 Wrist Roll</span>
-            <span class="joint-angle" id="ang-j6">180.00°</span>
+          <div class="joint-card-header">
+            <span class="joint-name">J6 Wrist Roll (C)</span>
+            <span class="joint-deg-readout" id="ang-j6">180.00°</span>
           </div>
-          <div class="joint-controls">
-            <button class="btn-jog" data-joint="6" data-dir="-1">-</button>
-            <button class="btn-jog" data-joint="6" data-dir="1">+</button>
+          <div class="joint-bar-track"><div id="bar-j6" class="joint-bar-fill"></div></div>
+          <div class="joint-jog-controls">
+            <button class="btn-jog" onclick="jogJoint(6, -1)">◀ -</button>
+            <button class="btn-jog" onclick="jogJoint(6, 1)">+ ▶</button>
           </div>
+        </div>
+      </div>
+
+      <!-- Gripper Panel -->
+      <div class="gripper-strip">
+        <span class="gripper-title">🗜️ GRIPPER: <span id="telem-grip-val" class="telem-val">62.5</span> mm</span>
+        <input type="range" id="gripper-slider" class="gripper-slider" min="0" max="62.5" step="0.5" value="62.5" oninput="onGripperSlider(this.value)">
+        <div class="gripper-quick-btns">
+          <button class="btn-grip" onclick="setGripper(62.5)">OPEN (62.5mm)</button>
+          <button class="btn-grip" onclick="setGripper(30.0)">HALF (30mm)</button>
+          <button class="btn-grip" onclick="setGripper(0.0)">CLOSE (0mm)</button>
         </div>
       </div>
     </section>
 
-    <!-- TAB 2: CARTESIAN JOG -->
+    <!-- TAB 2: CARTESIAN JOGGING -->
     <section id="tab-cartesian" class="tab-pane">
-      <div style="background: rgba(0, 240, 255, 0.08); border: 1px solid var(--accent); padding: 10px 14px; border-radius: 8px; font-size: 11px; margin-bottom: 12px; color: var(--accent); line-height: 1.4;">
-        <strong>⚡ Windows Control Suite Distributed Architecture:</strong> Full 6-DOF Inverse Kinematics, Cartesian path planning, and trajectory generation are calculated on the Windows PC. The robot directly follows real-time joint stream data computed by Windows or the touchscreen jog controls.
-      </div>
-
-      <div class="cartesian-box">
-        <div class="cartesian-title">TCP Pose [X, Y, Z (mm) | RX, RY, RZ (deg)]</div>
-        <div class="cartesian-readout">
-          <div class="cartesian-val">X: <span id="tcp-x">0</span></div>
-          <div class="cartesian-val">Y: <span id="tcp-y">0</span></div>
-          <div class="cartesian-val">Z: <span id="tcp-z">0</span></div>
-          <div class="cartesian-val">RX: <span id="tcp-rx">0</span>°</div>
-          <div class="cartesian-val">RY: <span id="tcp-ry">0</span>°</div>
-          <div class="cartesian-val">RZ: <span id="tcp-rz">0</span>°</div>
-        </div>
-      </div>
-
+      <!-- Step Size Bar -->
       <div class="step-bar">
-        <span class="step-label">Cartesian Step:</span>
-        <div class="step-options" id="cart-step-selector">
-          <button class="step-opt-btn" data-val="1.0">1mm</button>
-          <button class="step-opt-btn active" data-val="10.0">10mm</button>
-          <button class="step-opt-btn" data-val="25.0">25mm</button>
-          <button class="step-opt-btn" data-val="50.0">50mm</button>
-        </div>
+        <span class="step-bar-label">Linear Step:</span>
+        <button class="step-btn-cart" data-step="0.5">0.5mm</button>
+        <button class="step-btn-cart" data-step="1.0">1.0mm</button>
+        <button class="step-btn-cart active" data-step="5.0">5.0mm</button>
+        <button class="step-btn-cart" data-step="10.0">10.0mm</button>
+        <button class="step-btn-cart" data-step="50.0">50.0mm</button>
       </div>
 
-      <div class="cartesian-controls-grid">
-        <div class="cartesian-box">
-          <div class="cartesian-title">X-Axis (Left / Right)</div>
-          <div class="joint-controls" style="justify-content:center;">
-            <button class="btn-jog btn-cart" data-axis="X" data-dir="-1">-X</button>
-            <button class="btn-jog btn-cart" data-axis="X" data-dir="1">+X</button>
+      <!-- Linear X / Y / Z Grid -->
+      <div style="font-size:12px; font-weight:800; color:var(--text-dim); margin-top:4px;">TCP TRANSLATION (BASE FRAME)</div>
+      <div class="cartesian-grid">
+        <button class="cart-btn cart-x" onclick="jogCart('X', 1)">+X (Forward)</button>
+        <button class="cart-btn cart-y" onclick="jogCart('Y', 1)">+Y (Left)</button>
+        <button class="cart-btn cart-z" onclick="jogCart('Z', 1)">+Z (Up)</button>
+        <button class="cart-btn cart-x" onclick="jogCart('X', -1)">-X (Backward)</button>
+        <button class="cart-btn cart-y" onclick="jogCart('Y', -1)">-Y (Right)</button>
+        <button class="cart-btn cart-z" onclick="jogCart('Z', -1)">-Z (Down)</button>
+      </div>
+
+      <!-- Angular Roll / Pitch / Yaw Grid -->
+      <div style="font-size:12px; font-weight:800; color:var(--text-dim); margin-top:4px;">TOOL ORIENTATION (ROLL, PITCH, YAW)</div>
+      <div class="cartesian-grid">
+        <button class="cart-btn cart-rot" onclick="jogCart('RX', 1)">+Roll (5°)</button>
+        <button class="cart-btn cart-rot" onclick="jogCart('RY', 1)">+Pitch (5°)</button>
+        <button class="cart-btn cart-rot" onclick="jogCart('RZ', 1)">+Yaw (5°)</button>
+        <button class="cart-btn cart-rot" onclick="jogCart('RX', -1)">-Roll (5°)</button>
+        <button class="cart-btn cart-rot" onclick="jogCart('RY', -1)">-Pitch (5°)</button>
+        <button class="cart-btn cart-rot" onclick="jogCart('RZ', -1)">-Yaw (5°)</button>
+      </div>
+
+      <div style="display:flex; justify-content:flex-end; gap:8px; margin-top:8px;">
+        <button class="btn-maintenance btn-maint-primary" style="flex:1;" onclick="sendCmd({cmd:'SET_CAD_HOME'})">📍 Calibrate CAD Zero Reference</button>
+      </div>
+    </section>
+
+    <!-- TAB 3: SETTINGS & CALIBRATION -->
+    <section id="tab-settings" class="tab-pane">
+      <div class="settings-list">
+        <!-- Global Speed Scale -->
+        <div class="settings-box">
+          <h3>⚡ Global Velocity Scaling</h3>
+          <div style="display:flex; align-items:center; gap:14px;">
+            <input type="range" id="speed-slider" min="10" max="100" value="40" style="flex:1; height:32px; accent-color:var(--accent);" oninput="updateSpeedScale(this.value)">
+            <span id="speed-val" style="font-size:16px; font-weight:800; font-family:monospace; min-width:50px;">40%</span>
           </div>
         </div>
 
-        <div class="cartesian-box">
-          <div class="cartesian-title">Y-Axis (Forward / Back)</div>
-          <div class="joint-controls" style="justify-content:center;">
-            <button class="btn-jog btn-cart" data-axis="Y" data-dir="-1">-Y</button>
-            <button class="btn-jog btn-cart" data-axis="Y" data-dir="1">+Y</button>
+        <!-- Persistent Homing Trims -->
+        <div class="settings-box">
+          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
+            <h3>📐 Persistent Calibration Trims (offsets.json)</h3>
+            <span id="trim-save-status" style="font-size:12px; font-weight:800; color:var(--green); display:none;">✓ Saved to Pi Storage</span>
+          </div>
+          <table class="trims-table">
+            <thead>
+              <tr>
+                <th>Joint</th>
+                <th>Trim Offset</th>
+                <th>Adjust (-0.1°)</th>
+                <th>Adjust (+0.1°)</th>
+                <th>Reset</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr><td>J1 Base</td><td class="trim-val" id="trim-j1">+0.00°</td><td><button class="btn-nudge" onclick="adjustTrim('j1', -0.1)">-0.1°</button></td><td><button class="btn-nudge" onclick="adjustTrim('j1', 0.1)">+0.1°</button></td><td><button class="btn-nudge" onclick="resetTrim('j1')">0</button></td></tr>
+              <tr><td>J2 Shoulder</td><td class="trim-val" id="trim-j2">+0.00°</td><td><button class="btn-nudge" onclick="adjustTrim('j2', -0.1)">-0.1°</button></td><td><button class="btn-nudge" onclick="adjustTrim('j2', 0.1)">+0.1°</button></td><td><button class="btn-nudge" onclick="resetTrim('j2')">0</button></td></tr>
+              <tr><td>J3 Elbow</td><td class="trim-val" id="trim-j3">+0.00°</td><td><button class="btn-nudge" onclick="adjustTrim('j3', -0.1)">-0.1°</button></td><td><button class="btn-nudge" onclick="adjustTrim('j3', 0.1)">+0.1°</button></td><td><button class="btn-nudge" onclick="resetTrim('j3')">0</button></td></tr>
+              <tr><td>J4 Forearm</td><td class="trim-val" id="trim-j4">+0.00°</td><td><button class="btn-nudge" onclick="adjustTrim('j4', -0.1)">-0.1°</button></td><td><button class="btn-nudge" onclick="adjustTrim('j4', 0.1)">+0.1°</button></td><td><button class="btn-nudge" onclick="resetTrim('j4')">0</button></td></tr>
+              <tr><td>J5 Pitch</td><td class="trim-val" id="trim-j5">+0.00°</td><td><button class="btn-nudge" onclick="adjustTrim('j5', -0.1)">-0.1°</button></td><td><button class="btn-nudge" onclick="adjustTrim('j5', 0.1)">+0.1°</button></td><td><button class="btn-nudge" onclick="resetTrim('j5')">0</button></td></tr>
+              <tr><td>J6 Roll</td><td class="trim-val" id="trim-j6">+0.00°</td><td><button class="btn-nudge" onclick="adjustTrim('j6', -0.1)">-0.1°</button></td><td><button class="btn-nudge" onclick="adjustTrim('j6', 0.1)">+0.1°</button></td><td><button class="btn-nudge" onclick="resetTrim('j6')">0</button></td></tr>
+            </tbody>
+          </table>
+          <div style="display:flex; justify-content:flex-end; gap:10px; margin-top:12px;">
+            <button class="btn-maintenance btn-maint-primary" style="background:#1e2638; border-color:#2f3b54;" onclick="resetAllTrims()">Reset All Trims</button>
+            <button class="btn-maintenance btn-maint-green" onclick="saveTrims()">💾 Save Trims</button>
           </div>
         </div>
 
-        <div class="cartesian-box">
-          <div class="cartesian-title">Z-Axis (Up / Down)</div>
-          <div class="joint-controls" style="justify-content:center;">
-            <button class="btn-jog btn-cart" data-axis="Z" data-dir="-1">-Z</button>
-            <button class="btn-jog btn-cart" data-axis="Z" data-dir="1">+Z</button>
+        <!-- Hardware Actions -->
+        <div class="settings-box">
+          <h3>🛠️ Hardware Maintenance &amp; Recovery</h3>
+          <div style="display:flex; gap:10px; flex-wrap:wrap;">
+            <button class="btn-maintenance btn-maint-green" style="flex:1;" onclick="sendCmd({cmd:'WAKE_ARM'})">⚡ Energize Steppers</button>
+            <button class="btn-maintenance btn-maint-primary" style="flex:1;" onclick="sendCmd({cmd:'SET_CAD_HOME'})">📍 Set CAD Home</button>
+            <button class="btn-maintenance btn-maint-warn" style="flex:1;" onclick="sendCmd({cmd:'RESET'})">🔄 Reset Klipper Core</button>
           </div>
         </div>
       </div>
     </section>
 
-    <!-- TAB 3: PRESETS & GRIPPER -->
-    <section id="tab-presets" class="tab-pane">
-      <div class="cartesian-box">
-        <div class="cartesian-title">End-Effector Gripper</div>
-        <div style="display:flex; align-items:center; gap:16px;">
-          <input type="range" id="gripper-range" min="0" max="62.5" step="0.5" value="62.5" style="flex:1; height:40px;">
-          <span id="gripper-val-text" style="font-size:20px; font-weight:800; font-family:monospace; min-width:80px;">62.5 mm</span>
+    <!-- TAB 4: DUAL-LINK RX/TX DIAGNOSTIC LOGS (SUITE <-> RPI & RPI <-> MCU) -->
+    <section id="tab-logs" class="tab-pane">
+      <!-- Active MCU / Klipper Error Banner -->
+      <div id="mcu-error-banner" style="display:none; background:#7f1d1d; border:1px solid var(--red); color:#fecaca; padding:8px 12px; border-radius:8px; font-size:12px; font-weight:800; align-items:center; justify-content:space-between; flex-shrink:0;">
+        <span id="mcu-error-text">!! Klipper Error</span>
+        <button onclick="clearCommLogs()" style="background:var(--red); color:#fff; border:none; padding:4px 10px; border-radius:4px; font-weight:800; cursor:pointer;">DISMISS</button>
+      </div>
+
+      <!-- Log Controls Bar -->
+      <div style="display:flex; justify-content:space-between; align-items:center; gap:8px; flex-shrink:0;">
+        <div style="font-size:11px; font-weight:800; color:var(--text-dim);">
+          LIVE DUAL-BUS I/O MONITOR • <span id="log-count-label" style="color:var(--accent);">0 events</span>
         </div>
-        <div style="display:flex; gap:10px;">
-          <button class="btn-action" id="btn-grip-open" style="flex:1;">Full Open (62.5mm)</button>
-          <button class="btn-action" id="btn-grip-half" style="flex:1;">Half (31mm)</button>
-          <button class="btn-action" id="btn-grip-close" style="flex:1;">Full Grip (0mm)</button>
+        <div style="display:flex; gap:6px;">
+          <button id="btn-pause-logs" class="btn-grip" style="min-height:34px;" onclick="togglePauseLogs()">⏸️ PAUSE</button>
+          <button class="btn-grip" style="min-height:34px; background:#7f1d1d; border-color:var(--red);" onclick="clearCommLogs()">🗑️ CLEAR LOGS</button>
         </div>
       </div>
 
-      <div class="cartesian-box">
-        <div class="cartesian-title">Vantage & Storage Poses</div>
-        <div class="preset-grid">
-          <button class="btn-action" data-preset="CAD_HOME">📐 CAD Home</button>
-          <button class="btn-action" data-preset="PARK">📦 Park (Transport)</button>
-          <button class="btn-action" data-preset="CANDLE">🕯️ Candle (Vertical)</button>
-          <button class="btn-action" data-preset="STANDBY">⏳ Standby Pose</button>
-        </div>
-      </div>
-    </section>
-
-    <!-- TAB 4: DIAGNOSTICS & DIRECT HARDWARE JOG -->
-    <section id="tab-diagnostics" class="tab-pane">
-      
-      <!-- Stepper Coils Power Control -->
-      <div class="cartesian-box">
-        <div class="cartesian-title">Motor Coils Power State</div>
-        <div style="display:flex; gap:10px;">
-          <button class="btn-action btn-action-primary" style="flex:1;" onclick="sendCmd({cmd:'SET_COILS', enable:true})">⚡ Wake & Energize Coils</button>
-          <button class="btn-action btn-action-warn" style="flex:1;" onclick="sendCmd({cmd:'SET_COILS', enable:false})">💤 De-Energize Coils</button>
-          <button class="btn-action" style="flex:1;" onclick="sendCmd({cmd:'RECONNECT_MCU'})">🔄 Reconnect Serial</button>
-        </div>
-      </div>
-
-      <!-- Live Endstop Status Matrix -->
-      <div class="cartesian-box">
-        <div style="display:flex; justify-content:space-between; align-items:center;">
-          <div class="cartesian-title">Live Hardware Endstop Matrix</div>
-          <span id="raw-endstop-hex" style="font-family:monospace; font-size:11px; color:var(--accent);">RAW: 0x00</span>
-        </div>
-        <div class="endstop-matrix">
-          <div class="endstop-card" id="card-es-1">
-            <div class="endstop-header">
-              <span>J1 (PE5 / X-min)</span>
-              <span class="endstop-pill endstop-open" id="es-pill-1">OPEN</span>
-            </div>
-            <div style="display:flex; justify-content:space-between; margin-top:2px;">
-              <label style="font-size:10px; color:var(--text-dim); display:flex; align-items:center; gap:4px;">
-                <input type="checkbox" id="chk-es-0" onchange="toggleInvert(0, this.checked)"> Invert Logic
-              </label>
-              <label style="font-size:10px; color:var(--accent); display:flex; align-items:center; gap:4px;">
-                <input type="checkbox" id="chk-dir-0" onchange="toggleDirInvert(0, this.checked)"> Invert Dir
-              </label>
-            </div>
+      <!-- Dual Split Terminal Columns -->
+      <div style="display:grid; grid-template-columns:1fr 1fr; gap:8px; flex:1; min-height:0;">
+        <!-- Column 1: Suite / Touch <-> RPi Daemon -->
+        <div style="background:#080a0f; border:1px solid var(--card-border); border-radius:8px; display:flex; flex-direction:column; min-height:0; overflow:hidden;">
+          <div style="background:#121722; padding:6px 10px; border-bottom:1px solid var(--card-border); font-size:11px; font-weight:900; color:var(--accent); display:flex; justify-content:space-between;">
+            <span>💻 SUITE / TOUCH ↔ RPI DAEMON</span>
+            <span style="color:var(--text-dim); font-size:10px;">WS :8765 / UDP :8766</span>
           </div>
-
-          <div class="endstop-card" id="card-es-2">
-            <div class="endstop-header">
-              <span>J2 (PE4 / X-max)</span>
-              <span class="endstop-pill endstop-open" id="es-pill-2">OPEN</span>
-            </div>
-            <div style="display:flex; justify-content:space-between; margin-top:2px;">
-              <label style="font-size:10px; color:var(--text-dim); display:flex; align-items:center; gap:4px;">
-                <input type="checkbox" id="chk-es-1" onchange="toggleInvert(1, this.checked)"> Invert Logic
-              </label>
-              <label style="font-size:10px; color:var(--accent); display:flex; align-items:center; gap:4px;">
-                <input type="checkbox" id="chk-dir-1" onchange="toggleDirInvert(1, this.checked)"> Invert Dir
-              </label>
-            </div>
-          </div>
-
-          <div class="endstop-card" id="card-es-3">
-            <div class="endstop-header">
-              <span>J3 (PJ1 / Y-min)</span>
-              <span class="endstop-pill endstop-open" id="es-pill-3">OPEN</span>
-            </div>
-            <div style="display:flex; justify-content:space-between; margin-top:2px;">
-              <label style="font-size:10px; color:var(--text-dim); display:flex; align-items:center; gap:4px;">
-                <input type="checkbox" id="chk-es-2" onchange="toggleInvert(2, this.checked)"> Invert Logic
-              </label>
-              <label style="font-size:10px; color:var(--accent); display:flex; align-items:center; gap:4px;">
-                <input type="checkbox" id="chk-dir-2" onchange="toggleDirInvert(2, this.checked)"> Invert Dir
-              </label>
-            </div>
-          </div>
-
-          <div class="endstop-card" id="card-es-4">
-            <div class="endstop-header">
-              <span>J4 (PJ0 / Y-max)</span>
-              <span class="endstop-pill endstop-open" id="es-pill-4">OPEN</span>
-            </div>
-            <div style="display:flex; justify-content:space-between; margin-top:2px;">
-              <label style="font-size:10px; color:var(--text-dim); display:flex; align-items:center; gap:4px;">
-                <input type="checkbox" id="chk-es-3" onchange="toggleInvert(3, this.checked)"> Invert Logic
-              </label>
-              <label style="font-size:10px; color:var(--accent); display:flex; align-items:center; gap:4px;">
-                <input type="checkbox" id="chk-dir-3" onchange="toggleDirInvert(3, this.checked)"> Invert Dir
-              </label>
-            </div>
-          </div>
-
-          <div class="endstop-card" id="card-es-5">
-            <div class="endstop-header">
-              <span>J5 (PD3 / Z-min)</span>
-              <span class="endstop-pill endstop-open" id="es-pill-5">OPEN</span>
-            </div>
-            <div style="display:flex; justify-content:space-between; margin-top:2px;">
-              <label style="font-size:10px; color:var(--text-dim); display:flex; align-items:center; gap:4px;">
-                <input type="checkbox" id="chk-es-4" onchange="toggleInvert(4, this.checked)"> Invert Logic
-              </label>
-              <label style="font-size:10px; color:var(--accent); display:flex; align-items:center; gap:4px;">
-                <input type="checkbox" id="chk-dir-4" onchange="toggleDirInvert(4, this.checked)"> Invert Dir
-              </label>
-            </div>
-          </div>
-
-          <div class="endstop-card" id="card-es-6">
-            <div class="endstop-header">
-              <span>J6 (PD2 / Z-max)</span>
-              <span class="endstop-pill endstop-open" id="es-pill-6">OPEN</span>
-            </div>
-            <div style="display:flex; justify-content:space-between; margin-top:2px;">
-              <label style="font-size:10px; color:var(--text-dim); display:flex; align-items:center; gap:4px;">
-                <input type="checkbox" id="chk-es-5" onchange="toggleInvert(5, this.checked)"> Invert Logic
-              </label>
-              <label style="font-size:10px; color:var(--accent); display:flex; align-items:center; gap:4px;">
-                <input type="checkbox" id="chk-dir-5" onchange="toggleDirInvert(5, this.checked)"> Invert Dir
-              </label>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <!-- Direct Stepper Pulse Generator (Bypasses Kinematics) -->
-      <div class="cartesian-box">
-        <div class="cartesian-title">Direct Stepper Pulse Testing (Bypasses Kinematics)</div>
-        <div class="manual-step-grid">
-          <!-- J1 -->
-          <div class="diag-joint-box">
-            <span style="font-size:12px; font-weight:700;">J1 Base Yaw</span>
-            <div class="diag-btn-row">
-              <button class="btn-step" onclick="directStep(1, 0, 100)">-100 Steps</button>
-              <button class="btn-step" onclick="directStep(1, 0, 10)">-10</button>
-              <button class="btn-step" onclick="directStep(1, 1, 10)">+10</button>
-              <button class="btn-step" onclick="directStep(1, 1, 100)">+100 Steps</button>
-            </div>
-          </div>
-
-          <!-- J2 -->
-          <div class="diag-joint-box">
-            <span style="font-size:12px; font-weight:700;">J2 Shoulder Pitch</span>
-            <div class="diag-btn-row">
-              <button class="btn-step" onclick="directStep(2, 0, 100)">-100 Steps</button>
-              <button class="btn-step" onclick="directStep(2, 0, 10)">-10</button>
-              <button class="btn-step" onclick="directStep(2, 1, 10)">+10</button>
-              <button class="btn-step" onclick="directStep(2, 1, 100)">+100 Steps</button>
-            </div>
-          </div>
-
-          <!-- J3 -->
-          <div class="diag-joint-box">
-            <span style="font-size:12px; font-weight:700;">J3 Elbow Pitch</span>
-            <div class="diag-btn-row">
-              <button class="btn-step" onclick="directStep(3, 0, 100)">-100 Steps</button>
-              <button class="btn-step" onclick="directStep(3, 0, 10)">-10</button>
-              <button class="btn-step" onclick="directStep(3, 1, 10)">+10</button>
-              <button class="btn-step" onclick="directStep(3, 1, 100)">+100 Steps</button>
-            </div>
-          </div>
-
-          <!-- J4 -->
-          <div class="diag-joint-box">
-            <span style="font-size:12px; font-weight:700;">J4 Forearm Roll</span>
-            <div class="diag-btn-row">
-              <button class="btn-step" onclick="directStep(4, 0, 100)">-100 Steps</button>
-              <button class="btn-step" onclick="directStep(4, 0, 10)">-10</button>
-              <button class="btn-step" onclick="directStep(4, 1, 10)">+10</button>
-              <button class="btn-step" onclick="directStep(4, 1, 100)">+100 Steps</button>
-            </div>
-          </div>
-
-          <!-- J5 -->
-          <div class="diag-joint-box">
-            <span style="font-size:12px; font-weight:700;">J5 Wrist Pitch</span>
-            <div class="diag-btn-row">
-              <button class="btn-step" onclick="directStep(5, 0, 100)">-100 Steps</button>
-              <button class="btn-step" onclick="directStep(5, 0, 10)">-10</button>
-              <button class="btn-step" onclick="directStep(5, 1, 10)">+10</button>
-              <button class="btn-step" onclick="directStep(5, 1, 100)">+100 Steps</button>
-            </div>
-          </div>
-
-          <!-- J6 -->
-          <div class="diag-joint-box">
-            <span style="font-size:12px; font-weight:700;">J6 Wrist Roll</span>
-            <div class="diag-btn-row">
-              <button class="btn-step" onclick="directStep(6, 0, 100)">-100 Steps</button>
-              <button class="btn-step" onclick="directStep(6, 0, 10)">-10</button>
-              <button class="btn-step" onclick="directStep(6, 1, 10)">+10</button>
-              <button class="btn-step" onclick="directStep(6, 1, 100)">+100 Steps</button>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <!-- Homing Sequencer -->
-      <div class="cartesian-box">
-        <div class="cartesian-title">Homing Sequencer Commands</div>
-        <div style="display:flex; gap:8px; flex-wrap:wrap;">
-          <button class="btn-action btn-action-primary" style="flex:2;" onclick="sendCmd({cmd:'HOME', joint:'ALL'})">🚀 Sequential Homing (J2->J3->J1->J4->J6->J5)</button>
-          <button class="btn-action" style="flex:1;" onclick="sendCmd({cmd:'HOME', joint:'WRIST'})">Home Wrist (J4,J5,J6)</button>
-        </div>
-        <div style="display:flex; gap:6px; margin-top:6px;">
-          <button class="btn-step" onclick="sendCmd({cmd:'HOME', joint:1})">Home J1</button>
-          <button class="btn-step" onclick="sendCmd({cmd:'HOME', joint:2})">Home J2</button>
-          <button class="btn-step" onclick="sendCmd({cmd:'HOME', joint:3})">Home J3</button>
-          <button class="btn-step" onclick="sendCmd({cmd:'HOME', joint:4})">Home J4</button>
-          <button class="btn-step" onclick="sendCmd({cmd:'HOME', joint:5})">Home J5</button>
-          <button class="btn-step" onclick="sendCmd({cmd:'HOME', joint:6})">Home J6</button>
-        </div>
-      </div>
-
-    </section>
-
-    <!-- TAB 4: HOMING CALIBRATION & PERSISTENT TRIMS -->
-    <section id="tab-calibration" class="tab-pane">
-      <div class="cartesian-box">
-        <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px;">
-          <div>
-            <div class="cartesian-title" style="margin-bottom:2px;">📐 Homing Calibration & Persistent Offset Trims</div>
-            <div style="font-size:11px; color:var(--text-dim);">Fine-tune endstop zero offsets per joint to compensate for switch placement and mechanical click hysteresis. Persists directly in daemon/offsets.json.</div>
-          </div>
-          <div style="display:flex; align-items:center; gap:8px;">
-            <span id="trim-save-status" style="font-size:12px; font-weight:800; color:var(--green); display:none;">✓ Saved to offsets.json</span>
-            <button class="btn-action btn-action-primary" style="padding:10px 18px;" onclick="saveHomingTrims()">💾 Save Trims</button>
-            <button class="btn-action" style="padding:10px 14px;" onclick="resetAllTrims()">Reset All</button>
-          </div>
-        </div>
-      </div>
-
-      <div class="joint-grid" style="grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));">
-        <!-- Joint 1 Trim -->
-        <div class="joint-card">
-          <div class="joint-header">
-            <span class="joint-title">J1 (Base Yaw)</span>
-            <span class="joint-pos" id="calib-pos-j1">0.00°</span>
-          </div>
-          <div style="display:flex; justify-content:space-between; align-items:center; margin:8px 0;">
-            <span style="font-size:12px; color:var(--text-dim);">Offset Trim:</span>
-            <span id="trim-val-j1" style="font-size:18px; font-weight:800; color:var(--accent);">+0.00°</span>
-          </div>
-          <div class="diag-btn-row">
-            <button class="btn-step" onclick="adjustTrim('j1', -1.0)">-1.0°</button>
-            <button class="btn-step" onclick="adjustTrim('j1', -0.1)">-0.1°</button>
-            <button class="btn-step" onclick="adjustTrim('j1', +0.1)">+0.1°</button>
-            <button class="btn-step" onclick="adjustTrim('j1', +1.0)">+1.0°</button>
-          </div>
+          <div id="log-feed-suite" style="flex:1; overflow-y:auto; padding:8px; font-family:ui-monospace,Consolas,monospace; font-size:11px; display:flex; flex-direction:column; gap:4px;"></div>
         </div>
 
-        <!-- Joint 2 Trim -->
-        <div class="joint-card">
-          <div class="joint-header">
-            <span class="joint-title">J2 (Shoulder Pitch)</span>
-            <span class="joint-pos" id="calib-pos-j2">-90.00°</span>
+        <!-- Column 2: RPi Daemon <-> Klipper / MCU -->
+        <div style="background:#080a0f; border:1px solid var(--card-border); border-radius:8px; display:flex; flex-direction:column; min-height:0; overflow:hidden;">
+          <div style="background:#121722; padding:6px 10px; border-bottom:1px solid var(--card-border); font-size:11px; font-weight:900; color:var(--green); display:flex; justify-content:space-between;">
+            <span>🔌 RPI DAEMON ↔ KLIPPER / MCU</span>
+            <span style="color:var(--text-dim); font-size:10px;">PTY klippy.serial @ 250k</span>
           </div>
-          <div style="display:flex; justify-content:space-between; align-items:center; margin:8px 0;">
-            <span style="font-size:12px; color:var(--text-dim);">Offset Trim:</span>
-            <span id="trim-val-j2" style="font-size:18px; font-weight:800; color:var(--accent);">+0.00°</span>
-          </div>
-          <div class="diag-btn-row">
-            <button class="btn-step" onclick="adjustTrim('j2', -1.0)">-1.0°</button>
-            <button class="btn-step" onclick="adjustTrim('j2', -0.1)">-0.1°</button>
-            <button class="btn-step" onclick="adjustTrim('j2', +0.1)">+0.1°</button>
-            <button class="btn-step" onclick="adjustTrim('j2', +1.0)">+1.0°</button>
-          </div>
-        </div>
-
-        <!-- Joint 3 Trim -->
-        <div class="joint-card">
-          <div class="joint-header">
-            <span class="joint-title">J3 (Elbow Pitch)</span>
-            <span class="joint-pos" id="calib-pos-j3">180.00°</span>
-          </div>
-          <div style="display:flex; justify-content:space-between; align-items:center; margin:8px 0;">
-            <span style="font-size:12px; color:var(--text-dim);">Offset Trim:</span>
-            <span id="trim-val-j3" style="font-size:18px; font-weight:800; color:var(--accent);">+0.00°</span>
-          </div>
-          <div class="diag-btn-row">
-            <button class="btn-step" onclick="adjustTrim('j3', -1.0)">-1.0°</button>
-            <button class="btn-step" onclick="adjustTrim('j3', -0.1)">-0.1°</button>
-            <button class="btn-step" onclick="adjustTrim('j3', +0.1)">+0.1°</button>
-            <button class="btn-step" onclick="adjustTrim('j3', +1.0)">+1.0°</button>
-          </div>
-        </div>
-
-        <!-- Joint 4 Trim -->
-        <div class="joint-card">
-          <div class="joint-header">
-            <span class="joint-title">J4 (Forearm Roll)</span>
-            <span class="joint-pos" id="calib-pos-j4">0.00°</span>
-          </div>
-          <div style="display:flex; justify-content:space-between; align-items:center; margin:8px 0;">
-            <span style="font-size:12px; color:var(--text-dim);">Offset Trim:</span>
-            <span id="trim-val-j4" style="font-size:18px; font-weight:800; color:var(--accent);">+0.00°</span>
-          </div>
-          <div class="diag-btn-row">
-            <button class="btn-step" onclick="adjustTrim('j4', -1.0)">-1.0°</button>
-            <button class="btn-step" onclick="adjustTrim('j4', -0.1)">-0.1°</button>
-            <button class="btn-step" onclick="adjustTrim('j4', +0.1)">+0.1°</button>
-            <button class="btn-step" onclick="adjustTrim('j4', +1.0)">+1.0°</button>
-          </div>
-        </div>
-
-        <!-- Joint 5 Trim -->
-        <div class="joint-card">
-          <div class="joint-header">
-            <span class="joint-title">J5 (Wrist Pitch)</span>
-            <span class="joint-pos" id="calib-pos-j5">0.00°</span>
-          </div>
-          <div style="display:flex; justify-content:space-between; align-items:center; margin:8px 0;">
-            <span style="font-size:12px; color:var(--text-dim);">Offset Trim:</span>
-            <span id="trim-val-j5" style="font-size:18px; font-weight:800; color:var(--accent);">+0.00°</span>
-          </div>
-          <div class="diag-btn-row">
-            <button class="btn-step" onclick="adjustTrim('j5', -1.0)">-1.0°</button>
-            <button class="btn-step" onclick="adjustTrim('j5', -0.1)">-0.1°</button>
-            <button class="btn-step" onclick="adjustTrim('j5', +0.1)">+0.1°</button>
-            <button class="btn-step" onclick="adjustTrim('j5', +1.0)">+1.0°</button>
-          </div>
-        </div>
-
-        <!-- Joint 6 Trim -->
-        <div class="joint-card">
-          <div class="joint-header">
-            <span class="joint-title">J6 (Wrist Roll)</span>
-            <span class="joint-pos" id="calib-pos-j6">180.00°</span>
-          </div>
-          <div style="display:flex; justify-content:space-between; align-items:center; margin:8px 0;">
-            <span style="font-size:12px; color:var(--text-dim);">Offset Trim:</span>
-            <span id="trim-val-j6" style="font-size:18px; font-weight:800; color:var(--accent);">+0.00°</span>
-          </div>
-          <div class="diag-btn-row">
-            <button class="btn-step" onclick="adjustTrim('j6', -1.0)">-1.0°</button>
-            <button class="btn-step" onclick="adjustTrim('j6', -0.1)">-0.1°</button>
-            <button class="btn-step" onclick="adjustTrim('j6', +0.1)">+0.1°</button>
-            <button class="btn-step" onclick="adjustTrim('j6', +1.0)">+1.0°</button>
-          </div>
+          <div id="log-feed-mcu" style="flex:1; overflow-y:auto; padding:8px; font-family:ui-monospace,Consolas,monospace; font-size:11px; display:flex; flex-direction:column; gap:4px;"></div>
         </div>
       </div>
     </section>
   </main>
 
-  <!-- FULLSCREEN E-STOP LOCKOUT OVERLAY -->
-  <div id="estop-overlay">
-    <h2>🛑 EMERGENCY STOP ENGAGED</h2>
-    <p>All 6 stepper driver coils de-energized. Active motion and ring queues cleared.</p>
-    <button class="btn-reset" id="btn-reset-system">WAKE & RE-ENERGIZE MOTORS</button>
+  <!-- EMERGENCY STOP MODAL -->
+  <div class="estop-modal" id="estop-modal">
+    <h2>🛑 EMERGENCY STOP</h2>
+    <p>Hardware actuators de-energized. Lookahead motion queue flushed via Klipper M112.</p>
+    <div class="estop-recovery-actions">
+      <button class="btn-recovery btn-rec-reset" onclick="sendCmd({cmd:'RESET'})">
+        🔄 1. CLEAR LOCKOUT &amp; RESET MCU
+      </button>
+      <button class="btn-recovery btn-rec-home" onclick="triggerHoming()">
+        🏠 2. RUN HOMING SEQUENCE
+      </button>
+    </div>
   </div>
 
   <script>
     let ws = null;
-    let jointStep = 5.0;
-    let cartStep = 10.0;
-    let currentInvertMask = 0x00;
-    let currentDirInvertMask = 0x03;
+    let jogStep = 5.0;
+    let cartStep = 5.0;
     let homingTrims = { j1: 0.0, j2: 0.0, j3: 0.0, j4: 0.0, j5: 0.0, j6: 0.0 };
     let isEditingTrims = false;
     let trimEditTimeout = null;
 
+    let pingTimestamp = 0;
+    let measuredRtt = 0;
+    let measuredJitter = 0;
+
     const wsBadge = document.getElementById("ws-badge");
     const mcuBadge = document.getElementById("mcu-badge");
-    const overlay = document.getElementById("estop-overlay");
+    const estopModal = document.getElementById("estop-modal");
+
+    // Physical Joint Limits (min, max) for visual bar calculation
+    const jointLimits = [
+      [-175, 175], // J1
+      [-150, 50],  // J2
+      [65, 290],   // J3
+      [-240, 180], // J4
+      [-135, 150], // J5
+      [-180, 360]  // J6
+    ];
 
     // Establish WebSocket Connection
     function connectWS() {
-      const host = window.location.hostname || "localhost";
+      const host = window.location.hostname || "192.168.0.159";
       const wsUrl = `ws://${host}:8765`;
       ws = new WebSocket(wsUrl);
 
       ws.onopen = () => {
         wsBadge.textContent = "WS: Online";
         wsBadge.className = "status-badge status-online";
+        startPingTimer();
       };
 
       ws.onclose = () => {
         wsBadge.textContent = "WS: Offline";
         wsBadge.className = "status-badge status-offline";
-        mcuBadge.textContent = "MCU: Offline";
+        mcuBadge.textContent = "Klipper: Offline";
         mcuBadge.className = "status-badge status-offline";
-        setTimeout(connectWS, 1000);
+        stopPingTimer();
+        setTimeout(connectWS, 1500);
       };
 
       ws.onerror = () => {
@@ -1117,57 +1012,119 @@
           const msg = JSON.parse(event.data);
           if (msg.type === "TELEMETRY") {
             handleTelemetry(msg);
+          } else if (msg.type === "PONG") {
+            handlePong(msg);
+          } else if (msg.type === "TRIMS") {
+            if (msg.homing_trims_deg && !isEditingTrims) {
+              homingTrims = { ...msg.homing_trims_deg };
+              renderTrims();
+            }
           }
         } catch (e) {}
       };
     }
 
+    let pingInterval = null;
+    function startPingTimer() {
+      if (pingInterval) clearInterval(pingInterval);
+      pingInterval = setInterval(() => {
+        if (ws && ws.readyState === WebSocket.OPEN) {
+          pingTimestamp = performance.now();
+          ws.send(JSON.stringify({ cmd: "PING", time: pingTimestamp }));
+        }
+      }, 1000);
+    }
+
+    function stopPingTimer() {
+      if (pingInterval) {
+        clearInterval(pingInterval);
+        pingInterval = null;
+      }
+    }
+
+    function handlePong(msg) {
+      if (pingTimestamp > 0) {
+        const rtt = Math.round((performance.now() - pingTimestamp) * 10) / 10;
+        const delta = Math.abs(rtt - measuredRtt);
+        measuredJitter = Math.round((measuredJitter * 0.8 + delta * 0.2) * 10) / 10;
+        measuredRtt = rtt;
+
+        const rttEl = document.getElementById("telem-rtt");
+        if (rttEl) {
+          rttEl.textContent = `${measuredRtt} ms`;
+          rttEl.style.color = measuredRtt < 10 ? "var(--green)" : (measuredRtt < 30 ? "var(--amber)" : "var(--red)");
+        }
+        const jitterEl = document.getElementById("telem-jitter");
+        if (jitterEl) jitterEl.textContent = `±${measuredJitter} ms`;
+      }
+    }
+
+    // Unified Command Sender (WebSocket with HTTP REST Fallback)
     function sendCmd(cmdObj) {
       if (ws && ws.readyState === WebSocket.OPEN) {
         ws.send(JSON.stringify(cmdObj));
-      }
-    }
-
-    function directStep(joint, dir, steps) {
-      sendCmd({
-        cmd: "MANUAL_STEP",
-        joint: joint,
-        dir: dir,
-        steps: steps,
-        delay_us: 1000
-      });
-    }
-
-    function toggleInvert(jointIdx, checked) {
-      if (checked) {
-        currentInvertMask |= (1 << jointIdx);
       } else {
-        currentInvertMask &= ~(1 << jointIdx);
+        // Fallback to HTTP REST endpoint on Port 8000
+        const host = window.location.hostname || "192.168.0.159";
+        fetch(`http://${host}:8000/api/cmd`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(cmdObj)
+        }).catch(e => console.warn("HTTP Fallback failed:", e));
       }
+    }
+
+    function triggerHoming() {
+      const btn = document.getElementById("btn-top-home");
+      if (btn) {
+        btn.textContent = "⏳ HOMING...";
+        btn.style.opacity = "0.7";
+      }
+      sendCmd({ cmd: "HOME" });
+    }
+
+    function jogJoint(jointIdx, dir) {
       sendCmd({
-        cmd: "SET_ENDSTOP_INVERT",
-        mask: currentInvertMask
+        cmd: "JOG_JOINT",
+        joint: jointIdx,
+        delta_deg: jogStep * dir,
+        speed: 0.4
       });
     }
 
-    function toggleDirInvert(jointIdx, checked) {
-      if (checked) {
-        currentDirInvertMask |= (1 << jointIdx);
-      } else {
-        currentDirInvertMask &= ~(1 << jointIdx);
-      }
+    function jogCart(axis, dir) {
+      const step = (axis.startsWith("R")) ? 5.0 * dir : cartStep * dir;
       sendCmd({
-        cmd: "SET_DIR_INVERT",
-        mask: currentDirInvertMask
+        cmd: "JOG_CARTESIAN",
+        axis: axis,
+        delta: step,
+        speed: 0.4
       });
     }
 
-    // Homing Calibration Trims Functions
+    function onGripperSlider(val) {
+      document.getElementById("telem-grip-val").textContent = parseFloat(val).toFixed(1);
+      setGripper(parseFloat(val));
+    }
+
+    function setGripper(mm) {
+      sendCmd({ cmd: "SET_GRIPPER", mm: mm });
+    }
+
+    function updateSpeedScale(val) {
+      document.getElementById("speed-val").textContent = `${val}%`;
+      sendCmd({
+        cmd: "SET_SPEED_SCALE",
+        scale: parseFloat(val) / 100.0
+      });
+    }
+
+    // Trims Management
     function renderTrims() {
       for (let i = 1; i <= 6; i++) {
         const k = "j" + i;
         const val = homingTrims[k] || 0.0;
-        const el = document.getElementById("trim-val-" + k);
+        const el = document.getElementById("trim-" + k);
         if (el) {
           const sign = val >= 0 ? "+" : "";
           el.textContent = `${sign}${val.toFixed(2)}°`;
@@ -1216,7 +1173,7 @@
       flashTrimSaved();
     }
 
-    function saveHomingTrims() {
+    function saveTrims() {
       isEditingTrims = false;
       sendCmd({
         cmd: "SET_TRIMS",
@@ -1229,244 +1186,216 @@
     function flashTrimSaved() {
       const statusEl = document.getElementById("trim-save-status");
       if (statusEl) {
-        statusEl.style.display = "inline-block";
+        statusEl.style.display = "inline";
         setTimeout(() => { statusEl.style.display = "none"; }, 2500);
       }
     }
 
     function handleTelemetry(t) {
-      // MCU Connection Badge
-      if (t.mcu_connected) {
-        mcuBadge.textContent = `MCU: Live (${t.rtt_ms || 1}ms)`;
+      // Klipper Connection Badge
+      if (t.state === "ESTOP") {
+        mcuBadge.textContent = "Klipper: EMERGENCY STOP";
+        mcuBadge.className = "status-badge status-offline";
+      } else if (t.klipper_ready || t.mcu_connected) {
+        mcuBadge.textContent = "Klipper: 6-Axis Core (Ready)";
         mcuBadge.className = "status-badge status-online";
+      } else if (t.klipper_connected) {
+        mcuBadge.textContent = "Klipper: Standby";
+        mcuBadge.className = "status-badge status-amber";
       } else {
-        mcuBadge.textContent = "MCU: Reconnect";
+        mcuBadge.textContent = "Klipper: Offline";
         mcuBadge.className = "status-badge status-offline";
       }
 
-      // State & Top Bar
+      // State & Badges
       document.getElementById("telem-state").textContent = t.state;
-      document.getElementById("telem-rtt").textContent = t.rtt_ms || "--";
-      document.getElementById("telem-homed").textContent = t.homed ? "YES" : "NO";
+      document.getElementById("telem-homed").textContent = t.homed ? "YES (0x3F)" : "NO";
       document.getElementById("telem-homed").style.color = t.homed ? "var(--green)" : "var(--amber)";
-      document.getElementById("telem-grip").textContent = t.gripper_mm;
-      document.getElementById("telem-clock").textContent = t.mcu_clock ? (t.mcu_clock >>> 0) : "--";
 
+      // Top Home Button Feedback
+      const btnHome = document.getElementById("btn-top-home");
+      if (btnHome) {
+        if (t.state === "HOMING") {
+          btnHome.textContent = "⏳ HOMING...";
+          btnHome.style.opacity = "0.7";
+          btnHome.disabled = true;
+        } else {
+          btnHome.textContent = "🏠 HOME ALL";
+          btnHome.style.opacity = "1.0";
+          btnHome.disabled = false;
+        }
+      }
+
+      // Streaming state
       const streamSpan = document.getElementById("telem-stream");
       if (streamSpan && t.streaming_active !== undefined) {
         streamSpan.textContent = t.streaming_active ? "STREAMING" : "IDLE";
         streamSpan.style.color = t.streaming_active ? "var(--green)" : "var(--text-dim)";
       }
 
-      const unhomedBanner = document.getElementById("unhomed-alert-banner");
-      if (unhomedBanner && t.homed !== undefined) {
-        unhomedBanner.style.display = t.homed ? "none" : "flex";
-      }
-
-      // Joint Angles
-      if (t.joints_deg && t.joints_deg.length === 6) {
-        for (let i = 1; i <= 6; i++) {
-          const valStr = `${t.joints_deg[i - 1].toFixed(2)}°`;
-          const angEl = document.getElementById("ang-j" + i);
-          if (angEl) angEl.textContent = valStr;
-          const calibEl = document.getElementById("calib-pos-j" + i);
-          if (calibEl) calibEl.textContent = valStr;
+      // Gripper
+      if (t.gripper_mm !== undefined) {
+        document.getElementById("telem-grip-val").textContent = t.gripper_mm.toFixed(1);
+        const gripSlider = document.getElementById("gripper-slider");
+        if (gripSlider && document.activeElement !== gripSlider) {
+          gripSlider.value = t.gripper_mm;
         }
       }
 
-      // Live Homing Trims from Daemon
+      // Cartesian Pose Readout
+      if (t.pose) {
+        document.getElementById("pose-x").textContent = (t.pose.x || 0.0).toFixed(1);
+        document.getElementById("pose-y").textContent = (t.pose.y || 0.0).toFixed(1);
+        document.getElementById("pose-z").textContent = (t.pose.z || 0.0).toFixed(1);
+        document.getElementById("pose-r").textContent = (t.pose.roll || t.pose.rx || 0.0).toFixed(1);
+        document.getElementById("pose-p").textContent = (t.pose.pitch || t.pose.ry || 0.0).toFixed(1);
+        document.getElementById("pose-yaw").textContent = (t.pose.yaw || t.pose.rz || 0.0).toFixed(1);
+      }
+
+      // Unhomed Banner
+      const unhomedBanner = document.getElementById("unhomed-alert-banner");
+      if (unhomedBanner) {
+        unhomedBanner.style.display = (t.homed || t.state === "HOMING") ? "none" : "flex";
+      }
+
+      // Joint Angles Display & Range Fill Bars
+      if (t.joints_deg && t.joints_deg.length === 6) {
+        for (let i = 1; i <= 6; i++) {
+          const val = t.joints_deg[i - 1];
+          const valStr = `${val.toFixed(2)}°`;
+          const angEl = document.getElementById("ang-j" + i);
+          if (angEl) angEl.textContent = valStr;
+
+          // Update visual range bar
+          const barEl = document.getElementById("bar-j" + i);
+          if (barEl) {
+            const [min, max] = jointLimits[i - 1];
+            const pct = Math.max(0, Math.min(100, ((val - min) / (max - min)) * 100));
+            barEl.style.width = `${pct}%`;
+          }
+        }
+      }
+
+      // Trims sync
       if (t.homing_trims_deg && !isEditingTrims) {
         homingTrims = { ...t.homing_trims_deg };
         renderTrims();
       }
 
-      // Cartesian Pose
-      if (t.pose_mm_deg && t.pose_mm_deg.length === 6) {
-        document.getElementById("tcp-x").textContent = t.pose_mm_deg[0].toFixed(1);
-        document.getElementById("tcp-y").textContent = t.pose_mm_deg[1].toFixed(1);
-        document.getElementById("tcp-z").textContent = t.pose_mm_deg[2].toFixed(1);
-        document.getElementById("tcp-rx").textContent = t.pose_mm_deg[3].toFixed(1);
-        document.getElementById("tcp-ry").textContent = t.pose_mm_deg[4].toFixed(1);
-        document.getElementById("tcp-rz").textContent = t.pose_mm_deg[5].toFixed(1);
-      }
-
-      // Endstops Matrix
-      if (t.endstops && t.endstops.length === 6) {
-        for (let i = 0; i < 6; i++) {
-          const pill = document.getElementById(`es-pill-${i+1}`);
-          if (pill) {
-            const isTrig = t.endstops[i];
-            pill.textContent = isTrig ? "TRIGGERED" : "OPEN";
-            pill.className = `endstop-pill ${isTrig ? "endstop-triggered" : "endstop-open"}`;
-          }
+      // MCU Error Banner & Dual-Link Comm Logs
+      const errBanner = document.getElementById("mcu-error-banner");
+      const errDot = document.getElementById("log-err-dot");
+      if (t.last_mcu_error) {
+        if (errBanner) {
+          errBanner.style.display = "flex";
+          document.getElementById("mcu-error-text").textContent = t.last_mcu_error;
         }
-      }
-
-      if (t.endstops_mask !== undefined) {
-        document.getElementById("raw-endstop-hex").textContent = `RAW: 0x${(t.endstops_mask >>> 0).toString(16).toUpperCase().padStart(2, '0')} (0b${(t.endstops_mask >>> 0).toString(2).padStart(6, '0')})`;
-      }
-
-      if (t.endstop_invert_mask !== undefined) {
-        currentInvertMask = t.endstop_invert_mask;
-        for (let i = 0; i < 6; i++) {
-          const chk = document.getElementById(`chk-es-${i}`);
-          if (chk && document.activeElement !== chk) {
-            chk.checked = ((currentInvertMask >> i) & 1) === 1;
-          }
-        }
-      }
-
-      if (t.dir_invert_mask !== undefined) {
-        currentDirInvertMask = t.dir_invert_mask;
-        for (let i = 0; i < 6; i++) {
-          const chk = document.getElementById(`chk-dir-${i}`);
-          if (chk && document.activeElement !== chk) {
-            chk.checked = ((currentDirInvertMask >> i) & 1) === 1;
-          }
-        }
-      }
-
-      // E-Stop Overlay visibility
-      if (t.state === "ESTOP") {
-        overlay.style.display = "flex";
+        if (errDot) errDot.style.display = "inline";
       } else {
-        overlay.style.display = "none";
+        if (errBanner) errBanner.style.display = "none";
+        if (errDot) errDot.style.display = "none";
+      }
+
+      if (t.comm_logs && Array.isArray(t.comm_logs)) {
+        renderCommLogs(t.comm_logs);
+      }
+
+      // Full E-Stop Pulsing Overlay
+      if (estopModal) {
+        estopModal.style.display = (t.state === "ESTOP") ? "flex" : "none";
       }
     }
 
-    // Touch E-Stop Event (zero touch delay)
-    document.getElementById("btn-estop").addEventListener("pointerdown", (e) => {
-      e.preventDefault();
-      sendCmd({ cmd: "ESTOP" });
-      overlay.style.display = "flex";
+    let logsPaused = false;
+    let lastRenderedLogId = -1;
+
+    function togglePauseLogs() {
+      logsPaused = !logsPaused;
+      const btn = document.getElementById("btn-pause-logs");
+      if (btn) {
+        btn.textContent = logsPaused ? "▶️ RESUME" : "⏸️ PAUSE";
+        btn.style.background = logsPaused ? "var(--amber)" : "#1e2638";
+        btn.style.color = logsPaused ? "#000" : "#fff";
+      }
+    }
+
+    function clearCommLogs() {
+      lastRenderedLogId = -1;
+      const suiteEl = document.getElementById("log-feed-suite");
+      const mcuEl = document.getElementById("log-feed-mcu");
+      if (suiteEl) suiteEl.innerHTML = "";
+      if (mcuEl) mcuEl.innerHTML = "";
+      sendCmd({ cmd: "CLEAR_LOGS" });
+    }
+
+    function renderCommLogs(logs) {
+      if (logsPaused) return;
+      const newestId = logs.length > 0 ? logs[logs.length - 1].id : 0;
+      if (newestId === lastRenderedLogId) return;
+      lastRenderedLogId = newestId;
+
+      const suiteEl = document.getElementById("log-feed-suite");
+      const mcuEl = document.getElementById("log-feed-mcu");
+      if (!suiteEl || !mcuEl) return;
+
+      let suiteHtml = "";
+      let mcuHtml = "";
+      for (const item of logs) {
+        const badgeColor = item.dir === "ERR" ? "#ef4444" : (item.dir === "TX" ? "#c084fc" : "#38bdf8");
+        const textColor = item.dir === "ERR" ? "#fca5a5" : "#e2e8f0";
+        const row = `<div style="border-bottom:1px solid rgba(255,255,255,0.05); padding:3px 0; word-break:break-all;">` +
+          `<span style="color:#64748b;">[${item.ts}]</span> ` +
+          `<span style="color:${badgeColor}; font-weight:900;">[${item.dir}]</span> ` +
+          `<span style="color:${textColor};">${escapeHtml(item.msg)}</span></div>`;
+        if (item.link === "SUITE_RPI") {
+          suiteHtml += row;
+        } else {
+          mcuHtml += row;
+        }
+      }
+      suiteEl.innerHTML = suiteHtml || `<div style="color:#64748b;">No Suite ↔ RPi events yet...</div>`;
+      mcuEl.innerHTML = mcuHtml || `<div style="color:#64748b;">No RPi ↔ MCU events yet...</div>`;
+      suiteEl.scrollTop = suiteEl.scrollHeight;
+      mcuEl.scrollTop = mcuEl.scrollHeight;
+
+      const countEl = document.getElementById("log-count-label");
+      if (countEl) countEl.textContent = `${logs.length} recent events`;
+    }
+
+    function escapeHtml(str) {
+      return String(str)
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;");
+    }
+
+    // Joint Step Increment Buttons
+    document.querySelectorAll(".step-btn").forEach(btn => {
+      btn.addEventListener("click", () => {
+        document.querySelectorAll(".step-btn").forEach(b => b.classList.remove("active"));
+        btn.classList.add("active");
+        jogStep = parseFloat(btn.getAttribute("data-step"));
+      });
     });
 
-    document.getElementById("btn-reset-system").addEventListener("pointerdown", (e) => {
-      e.preventDefault();
-      sendCmd({ cmd: "RESET" });
-      overlay.style.display = "none";
+    // Cartesian Step Increment Buttons
+    document.querySelectorAll(".step-btn-cart").forEach(btn => {
+      btn.addEventListener("click", () => {
+        document.querySelectorAll(".step-btn-cart").forEach(b => b.classList.remove("active"));
+        btn.classList.add("active");
+        cartStep = parseFloat(btn.getAttribute("data-step"));
+      });
     });
 
-    // Tab Navigation
+    // Navigation Tabs Switching
     document.querySelectorAll(".tab-btn").forEach(btn => {
       btn.addEventListener("click", () => {
         document.querySelectorAll(".tab-btn").forEach(b => b.classList.remove("active"));
         document.querySelectorAll(".tab-pane").forEach(p => p.classList.remove("active"));
         btn.classList.add("active");
-        document.getElementById(btn.dataset.tab).classList.add("active");
-      });
-    });
-
-    // Joint Step Selection
-    document.querySelectorAll("#joint-step-selector .step-opt-btn").forEach(btn => {
-      btn.addEventListener("click", () => {
-        document.querySelectorAll("#joint-step-selector .step-opt-btn").forEach(b => b.classList.remove("active"));
-        btn.classList.add("active");
-        jointStep = parseFloat(btn.dataset.val);
-      });
-    });
-
-    // Cartesian Step Selection
-    document.querySelectorAll("#cart-step-selector .step-opt-btn").forEach(btn => {
-      btn.addEventListener("click", () => {
-        document.querySelectorAll("#cart-step-selector .step-opt-btn").forEach(b => b.classList.remove("active"));
-        btn.classList.add("active");
-        cartStep = parseFloat(btn.dataset.val);
-      });
-    });
-
-    // Joint Jog Handlers (Tap for discrete step, hold for continuous 20 Hz streaming)
-    let jogInterval = null;
-    let jogTimeout = null;
-
-    function startContinuousJog(joint, dir) {
-      stopContinuousJog();
-      // Send immediate first step
-      sendCmd({
-        cmd: "JOG_JOINT",
-        joint: joint,
-        delta_deg: dir * jointStep,
-        speed: 0.5
-      });
-
-      // After 250ms hold, stream continuous joint jog at 20 Hz
-      jogTimeout = setTimeout(() => {
-        jogInterval = setInterval(() => {
-          sendCmd({
-            cmd: "JOG_JOINT",
-            joint: joint,
-            delta_deg: dir * Math.max(0.2, jointStep * 0.4),
-            speed: 0.6
-          });
-        }, 50);
-      }, 250);
-    }
-
-    function stopContinuousJog() {
-      if (jogTimeout) { clearTimeout(jogTimeout); jogTimeout = null; }
-      if (jogInterval) { clearInterval(jogInterval); jogInterval = null; }
-    }
-
-    document.querySelectorAll(".btn-jog:not(.btn-cart)").forEach(btn => {
-      btn.addEventListener("pointerdown", (e) => {
-        e.preventDefault();
-        const joint = parseInt(btn.dataset.joint);
-        const dir = parseFloat(btn.dataset.dir);
-        startContinuousJog(joint, dir);
-      });
-      btn.addEventListener("pointerup", stopContinuousJog);
-      btn.addEventListener("pointercancel", stopContinuousJog);
-      btn.addEventListener("pointerleave", stopContinuousJog);
-    });
-
-    // Cartesian Jog Handlers
-    document.querySelectorAll(".btn-cart").forEach(btn => {
-      btn.addEventListener("click", () => {
-        const axis = btn.dataset.axis;
-        const dir = parseFloat(btn.dataset.dir);
-        sendCmd({
-          cmd: "JOG_CARTESIAN",
-          axis: axis,
-          delta: dir * cartStep,
-          speed: 0.5
-        });
-      });
-    });
-
-    // Gripper Controls
-    const gripRange = document.getElementById("gripper-range");
-    const gripValText = document.getElementById("gripper-val-text");
-
-    gripRange.addEventListener("input", () => {
-      gripValText.textContent = `${parseFloat(gripRange.value).toFixed(1)} mm`;
-    });
-
-    gripRange.addEventListener("change", () => {
-      sendCmd({ cmd: "SET_GRIPPER", mm: parseFloat(gripRange.value) });
-    });
-
-    document.getElementById("btn-grip-open").addEventListener("click", () => {
-      gripRange.value = 62.5;
-      gripValText.textContent = "62.5 mm";
-      sendCmd({ cmd: "SET_GRIPPER", mm: 62.5 });
-    });
-
-    document.getElementById("btn-grip-half").addEventListener("click", () => {
-      gripRange.value = 31.2;
-      gripValText.textContent = "31.2 mm";
-      sendCmd({ cmd: "SET_GRIPPER", mm: 31.2 });
-    });
-
-    document.getElementById("btn-grip-close").addEventListener("click", () => {
-      gripRange.value = 0.0;
-      gripValText.textContent = "0.0 mm";
-      sendCmd({ cmd: "SET_GRIPPER", mm: 0.0 });
-    });
-
-    // Preset Poses
-    document.querySelectorAll("[data-preset]").forEach(btn => {
-      btn.addEventListener("click", () => {
-        sendCmd({ cmd: "PRESET", name: btn.dataset.preset, speed: 0.5 });
+        const tabId = btn.getAttribute("data-tab");
+        const pane = document.getElementById(tabId);
+        if (pane) pane.classList.add("active");
       });
     });
 

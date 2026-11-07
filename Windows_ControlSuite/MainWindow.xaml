@@ -1,0 +1,959 @@
+<Window x:Class="PAROLC_ControlSuite.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        xmlns:helix="http://helix-toolkit.org/wpf"
+        mc:Ignorable="d"
+        Title="PAROL6 Control Suite &amp; 6-Axis Real-Time Motion Pipeline"
+        Height="920" Width="1480"
+        MinHeight="750" MinWidth="1100"
+        WindowStartupLocation="CenterScreen"
+        Background="#141418"
+        Foreground="#ECEFF1">
+
+    <Window.Resources>
+        <!-- Dark Cyberpunk / Industrial Robotics Palette -->
+        <SolidColorBrush x:Key="BgDark" Color="#141418"/>
+        <SolidColorBrush x:Key="PanelBg" Color="#1C1D24"/>
+        <SolidColorBrush x:Key="CardBg" Color="#252630"/>
+        <SolidColorBrush x:Key="BorderDark" Color="#323340"/>
+        <SolidColorBrush x:Key="TextLight" Color="#F0F3F6"/>
+        <SolidColorBrush x:Key="TextMuted" Color="#8C939E"/>
+        <SolidColorBrush x:Key="AccentCyan" Color="#00D2FF"/>
+        <SolidColorBrush x:Key="AccentGreen" Color="#00E676"/>
+        <SolidColorBrush x:Key="AccentOrange" Color="#FF9100"/>
+        <SolidColorBrush x:Key="DangerRed" Color="#FF1744"/>
+
+        <!-- Pulsing Red Animation for Emergency Stop Alert -->
+        <Storyboard x:Key="EstopPulseAnimation" RepeatBehavior="Forever">
+            <DoubleAnimation Storyboard.TargetName="EstopPulsingOverlay"
+                             Storyboard.TargetProperty="Opacity"
+                             From="0.05" To="0.45" Duration="0:0:0.6" AutoReverse="True"/>
+            <DoubleAnimation Storyboard.TargetName="EstopPulseBorder"
+                             Storyboard.TargetProperty="Opacity"
+                             From="0.2" To="1.0" Duration="0:0:0.6" AutoReverse="True"/>
+        </Storyboard>
+
+        <!-- Control Styles -->
+        <Style TargetType="Button">
+            <Setter Property="Background" Value="#2D2F3C"/>
+            <Setter Property="Foreground" Value="#F0F3F6"/>
+            <Setter Property="BorderBrush" Value="#3D4052"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="Padding" Value="10,6"/>
+            <Setter Property="FontWeight" Value="SemiBold"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="border" Background="{TemplateBinding Background}" 
+                                BorderBrush="{TemplateBinding BorderBrush}" 
+                                BorderThickness="{TemplateBinding BorderThickness}" 
+                                CornerRadius="4">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="border" Property="Background" Value="#3D4154"/>
+                            </Trigger>
+                            <Trigger Property="IsPressed" Value="True">
+                                <Setter TargetName="border" Property="Background" Value="#252733"/>
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter TargetName="border" Property="Opacity" Value="0.4"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <Style TargetType="TextBox">
+            <Setter Property="Background" Value="#252630"/>
+            <Setter Property="Foreground" Value="#00D2FF"/>
+            <Setter Property="BorderBrush" Value="#3D4052"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="Padding" Value="6,4"/>
+            <Setter Property="FontFamily" Value="Consolas, monospace"/>
+        </Style>
+
+        <Style TargetType="TabItem">
+            <Setter Property="Background" Value="#1C1D24"/>
+            <Setter Property="Foreground" Value="#8C939E"/>
+            <Setter Property="FontWeight" Value="SemiBold"/>
+            <Setter Property="Padding" Value="12,8"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="TabItem">
+                        <Border x:Name="tabBorder" Background="{TemplateBinding Background}" Padding="{TemplateBinding Padding}" Margin="0,0,4,0" CornerRadius="4,4,0,0">
+                            <ContentPresenter ContentSource="Header"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsSelected" Value="True">
+                                <Setter TargetName="tabBorder" Property="Background" Value="#252630"/>
+                                <Setter Property="Foreground" Value="#00D2FF"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+    </Window.Resources>
+
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/> <!-- Top Status Bar -->
+            <RowDefinition Height="Auto"/> <!-- Optional Warning Banner -->
+            <RowDefinition Height="*"/>    <!-- Main Viewport & Controls -->
+        </Grid.RowDefinitions>
+
+        <!-- TOP APP BAR -->
+        <Border Grid.Row="0" Background="{StaticResource PanelBg}" BorderBrush="{StaticResource BorderDark}" BorderThickness="0,0,0,1" Padding="12,8">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto"/> <!-- Logo / Title -->
+                    <ColumnDefinition Width="Auto"/> <!-- Connection Controls -->
+                    <ColumnDefinition Width="*"/>    <!-- Telemetry Badges -->
+                    <ColumnDefinition Width="Auto"/> <!-- Quick Action Buttons -->
+                </Grid.ColumnDefinitions>
+
+                <!-- Title -->
+                <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,16,0">
+                    <TextBlock Text="PAROL6" FontWeight="Black" FontSize="18" Foreground="{StaticResource AccentCyan}" VerticalAlignment="Center"/>
+                    <TextBlock Text=" 6-AXIS CORE" FontWeight="Bold" FontSize="14" Foreground="{StaticResource TextLight}" VerticalAlignment="Center" Margin="4,0,0,0"/>
+                    <Border Background="#252630" CornerRadius="3" Padding="4,2" Margin="8,0,0,0">
+                        <TextBlock Text="v2.5 KLIPPER TRAPQ" FontSize="10" FontWeight="Bold" Foreground="{StaticResource AccentGreen}"/>
+                    </Border>
+                </StackPanel>
+
+                <!-- Connection Box -->
+                <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,16,0">
+                    <TextBlock Text="PI HOST:" VerticalAlignment="Center" Foreground="{StaticResource TextMuted}" FontSize="11" FontWeight="Bold" Margin="0,0,6,0"/>
+                    <TextBox x:Name="TxtHostAddress" Text="{Binding PiAddress, Mode=TwoWay}" Width="150" VerticalAlignment="Center" Margin="0,0,6,0"/>
+                    <Button x:Name="BtnConnect" Content="{Binding ConnectButtonText}" Click="BtnConnect_Click" Width="95" Height="28">
+                        <Button.Style>
+                            <Style TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
+                                <Setter Property="Background" Value="#00796B"/>
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding IsConnected}" Value="True">
+                                        <Setter Property="Background" Value="#C2185B"/>
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </Button.Style>
+                    </Button>
+                </StackPanel>
+
+                <!-- Telemetry & Diagnostic Badges -->
+                <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
+                    <!-- Klipper Core Status Badge -->
+                    <Border CornerRadius="4" Padding="8,4" Margin="0,0,8,0">
+                        <Border.Style>
+                            <Style TargetType="Border">
+                                <Setter Property="Background" Value="#37474F"/>
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding KlipperReady}" Value="True">
+                                        <Setter Property="Background" Value="#1B5E20"/>
+                                    </DataTrigger>
+                                    <DataTrigger Binding="{Binding IsEstopActive}" Value="True">
+                                        <Setter Property="Background" Value="#B71C1C"/>
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </Border.Style>
+                        <StackPanel Orientation="Horizontal">
+                            <Ellipse Width="8" Height="8" Margin="0,0,6,0">
+                                <Ellipse.Style>
+                                    <Style TargetType="Ellipse">
+                                        <Setter Property="Fill" Value="#FF5252"/>
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding KlipperReady}" Value="True">
+                                                <Setter Property="Fill" Value="#69F0AE"/>
+                                            </DataTrigger>
+                                            <DataTrigger Binding="{Binding IsEstopActive}" Value="True">
+                                                <Setter Property="Fill" Value="#FF1744"/>
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </Ellipse.Style>
+                            </Ellipse>
+                            <TextBlock Text="{Binding KlipperStatus}" FontWeight="Bold" FontSize="11" Foreground="#FFFFFF"/>
+                        </StackPanel>
+                    </Border>
+
+                    <!-- Robot Engine State Badge -->
+                    <Border CornerRadius="4" Padding="8,4" Margin="0,0,8,0" Background="#263238">
+                        <TextBlock Text="{Binding RobotState, StringFormat='STATE: {0}'}" FontWeight="Bold" FontSize="11" Foreground="{StaticResource AccentCyan}"/>
+                    </Border>
+
+                    <!-- Homing Badge -->
+                    <Border CornerRadius="4" Padding="8,4" Margin="0,0,8,0">
+                        <Border.Style>
+                            <Style TargetType="Border">
+                                <Setter Property="Background" Value="#4A148C"/>
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding IsHomed}" Value="True">
+                                        <Setter Property="Background" Value="#006064"/>
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </Border.Style>
+                        <TextBlock Text="{Binding IsHomed, StringFormat='HOMED: {0}'}" FontWeight="Bold" FontSize="11" Foreground="#FFFFFF"/>
+                    </Border>
+
+                    <!-- Latency (TCP & UDP) -->
+                    <Border Background="#252630" CornerRadius="4" Padding="6,4" Margin="0,0,6,0" ToolTip="TCP Control RTT">
+                        <TextBlock Text="{Binding LatencyMs, StringFormat='TCP: {0:F1}ms'}" FontSize="11" FontFamily="Consolas" Foreground="{StaticResource AccentCyan}"/>
+                    </Border>
+
+                    <Border Background="#252630" CornerRadius="4" Padding="6,4" Margin="0,0,6,0" ToolTip="UDP Motion Streaming RTT">
+                        <TextBlock Text="{Binding UdpRttText}" FontSize="11" FontFamily="Consolas" Foreground="#00E5FF"/>
+                    </Border>
+
+                    <Border Background="#252630" CornerRadius="4" Padding="6,4" Margin="0,0,6,0" ToolTip="UDP Jitter Variation">
+                        <TextBlock Text="{Binding UdpJitterText}" FontSize="11" FontFamily="Consolas" Foreground="#FFD600"/>
+                    </Border>
+
+                    <!-- Update Rate -->
+                    <Border Background="#252630" CornerRadius="4" Padding="6,4" Margin="0,0,6,0">
+                        <TextBlock Text="{Binding UpdateRateHz, StringFormat='RATE: {0:F0}Hz'}" FontSize="11" FontFamily="Consolas" Foreground="{StaticResource AccentGreen}"/>
+                    </Border>
+                </StackPanel>
+
+                <!-- Quick Actions -->
+                <StackPanel Grid.Column="3" Orientation="Horizontal" VerticalAlignment="Center">
+                    <Button x:Name="BtnDebugStream" Content="DEBUG STREAM" Click="BtnDebugStream_Click" Background="#4A148C" Margin="0,0,6,0" ToolTip="Open live data stream &amp; packet monitor"/>
+                    <Button Content="SYNC TARGET" Click="BtnSyncGhost_Click" Background="#37474F" Margin="0,0,6,0" ToolTip="Sync target digital twin to active physical robot angles"/>
+                    <Button Content="CAD HOME" Click="BtnCadHome_Click" Background="#00838F" ToolTip="Move all joints to CAD home reference pose"/>
+                </StackPanel>
+            </Grid>
+        </Border>
+
+        <!-- OPTIONAL BRANCH JUMP / SAFETY WARNING BANNER -->
+        <Border Grid.Row="1" Background="#B71C1C" BorderBrush="#FF5252" BorderThickness="0,0,0,1" Padding="12,6">
+            <Border.Style>
+                <Style TargetType="Border">
+                    <Setter Property="Visibility" Value="Collapsed"/>
+                    <Style.Triggers>
+                        <DataTrigger Binding="{Binding HasWarning}" Value="True">
+                            <Setter Property="Visibility" Value="Visible"/>
+                        </DataTrigger>
+                    </Style.Triggers>
+                </Style>
+            </Border.Style>
+            <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
+                <TextBlock Text="⚠️ SAFETY GUARD ACTIVE: " FontWeight="Black" FontSize="12" Foreground="#FFFFFF"/>
+                <TextBlock Text="{Binding BranchJumpWarning}" FontSize="12" Foreground="#FFEBEE" FontWeight="Bold"/>
+            </StackPanel>
+        </Border>
+
+        <!-- MAIN WORKSPACE CONTENT -->
+        <Grid Grid.Row="2">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*"/>     <!-- 3D Viewport Column -->
+                <ColumnDefinition Width="420"/>   <!-- Right Control Dock -->
+            </Grid.ColumnDefinitions>
+
+            <!-- 3D VIEWPORT CONTAINER -->
+            <Grid Grid.Column="0">
+                <!-- HelixToolkit 3D Viewport -->
+                <helix:HelixViewport3D x:Name="Viewport3D" 
+                                       ZoomExtentsWhenLoaded="False" 
+                                       ShowCoordinateSystem="True" 
+                                       CoordinateSystemLabelX="X" 
+                                       CoordinateSystemLabelY="Y" 
+                                       CoordinateSystemLabelZ="Z"
+                                       ShowViewCube="True"
+                                       IsMoveEnabled="True"
+                                       IsRotationEnabled="True"
+                                       IsZoomEnabled="True"
+                                       Background="#0D0E12"
+                                       PreviewMouseDown="Viewport3D_PreviewMouseDown"
+                                       PreviewMouseMove="Viewport3D_PreviewMouseMove"
+                                       PreviewMouseUp="Viewport3D_PreviewMouseUp">
+
+                    <!-- Default Lighting -->
+                    <helix:DefaultLights/>
+
+                    <!-- Ground Grid in Millimeters -->
+                    <helix:GridLinesVisual3D Width="1000" Length="1000" MajorDistance="100" MinorDistance="20" Thickness="0.5" Fill="#20222B"/>
+                </helix:HelixViewport3D>
+
+                <!-- Floating 3D Overlays -->
+                <StackPanel VerticalAlignment="Top" HorizontalAlignment="Left" Margin="16">
+                    <Border Background="#CC141418" BorderBrush="{StaticResource BorderDark}" BorderThickness="1" CornerRadius="6" Padding="12,8" Margin="0,0,0,8">
+                        <StackPanel>
+                            <TextBlock Text="INTERACTIVE 3D DIGITAL TWIN" FontWeight="Bold" FontSize="12" Foreground="{StaticResource AccentCyan}"/>
+                            <TextBlock Text="• Drag 3D Gizmo at TCP to move Cartesian target" FontSize="11" Foreground="{StaticResource TextMuted}" Margin="0,4,0,0"/>
+                            <TextBlock Text="• Left Click + Drag: Orbit Camera | Right Click: Pan" FontSize="11" Foreground="{StaticResource TextMuted}"/>
+                            <TextBlock Text="• Solid Mesh: Interactive Target Twin (CAD)" FontSize="11" Foreground="{StaticResource TextMuted}"/>
+                            <TextBlock Text="• Cyan Ghost: Physical Telemetry Feedback" FontSize="11" Foreground="{StaticResource TextMuted}"/>
+                            <CheckBox x:Name="ChkShowGhost" Content="Display Physical Feedback Ghost" IsChecked="True" Checked="ChkShowGhost_Changed" Unchecked="ChkShowGhost_Changed" Foreground="{StaticResource TextLight}" Margin="0,6,0,0"/>
+                        </StackPanel>
+                    </Border>
+
+                    <!-- Floating Quick IK Tool Attitude Overlay -->
+                    <Border Background="#CC141418" BorderBrush="{StaticResource BorderDark}" BorderThickness="1" CornerRadius="6" Padding="12,8">
+                        <StackPanel>
+                            <TextBlock Text="IK &amp; TOOL ORIENTATION MODE" FontWeight="Bold" FontSize="11" Foreground="{StaticResource AccentOrange}" Margin="0,0,0,4"/>
+                            <RadioButton GroupName="OverlayIkMode" Content="🎯 Probe Tip (Free Tool Angle)" IsChecked="{Binding IsIkPositionOnly, Mode=TwoWay}" Foreground="{StaticResource TextLight}" Margin="0,2"/>
+                            <RadioButton GroupName="OverlayIkMode" Content="📐 Steady Tool (Lock Tool Angle)" IsChecked="{Binding IsIkLockOrientation, Mode=TwoWay}" Foreground="{StaticResource AccentCyan}" FontWeight="SemiBold" Margin="0,2"/>
+                            <StackPanel Orientation="Horizontal" Margin="0,6,0,0">
+                                <Button Content="⬇️ VERTICAL" Click="BtnToolVertical_Click" Padding="6,3" FontSize="10" Margin="0,0,4,0" Background="#00695C" ToolTip="Position tool vertically downward (-Z) and lock steady for drawing/picking"/>
+                                <Button Content="➡️ HORIZONTAL" Click="BtnToolHorizontal_Click" Padding="6,3" FontSize="10" Margin="0,0,4,0" Background="#1565C0" ToolTip="Position tool horizontally forward (+X) and lock orientation"/>
+                                <Button Content="🔒 LOCK NOW" Click="BtnLockCurrentAngle_Click" Padding="6,3" FontSize="10" Background="#37474F" ToolTip="Lock the tool at its current Roll/Pitch/Yaw attitude"/>
+                            </StackPanel>
+                        </StackPanel>
+                    </Border>
+                </StackPanel>
+
+                <!-- Camera Quick Reset Controls -->
+                <StackPanel VerticalAlignment="Bottom" HorizontalAlignment="Left" Orientation="Horizontal" Margin="16">
+                    <Button Content="ISOMETRIC" Click="BtnCamIso_Click" Margin="0,0,6,0" Padding="8,4" FontSize="10"/>
+                    <Button Content="FRONT" Click="BtnCamFront_Click" Margin="0,0,6,0" Padding="8,4" FontSize="10"/>
+                    <Button Content="TOP" Click="BtnCamTop_Click" Margin="0,0,6,0" Padding="8,4" FontSize="10"/>
+                    <Button Content="SIDE" Click="BtnCamSide_Click" Padding="8,4" FontSize="10"/>
+                </StackPanel>
+
+                <!-- Live TCP Coordinate Overlay (X, Y, Z, Roll, Pitch, Yaw) -->
+                <Border VerticalAlignment="Bottom" HorizontalAlignment="Right" Background="#CC141418" BorderBrush="{StaticResource BorderDark}" BorderThickness="1" CornerRadius="6" Padding="12,8" Margin="16">
+                    <Grid>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                        </Grid.RowDefinitions>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="55"/>
+                            <ColumnDefinition Width="65"/>
+                            <ColumnDefinition Width="65"/>
+                            <ColumnDefinition Width="65"/>
+                            <ColumnDefinition Width="65"/>
+                            <ColumnDefinition Width="65"/>
+                            <ColumnDefinition Width="65"/>
+                        </Grid.ColumnDefinitions>
+
+                        <TextBlock Grid.Row="0" Grid.Column="0" Text="POSE" FontWeight="Bold" FontSize="11" Foreground="{StaticResource AccentCyan}"/>
+                        <TextBlock Grid.Row="0" Grid.Column="1" Text="X (mm)" FontWeight="Bold" HorizontalAlignment="Center" Foreground="{StaticResource DangerRed}"/>
+                        <TextBlock Grid.Row="0" Grid.Column="2" Text="Y (mm)" FontWeight="Bold" HorizontalAlignment="Center" Foreground="{StaticResource AccentGreen}"/>
+                        <TextBlock Grid.Row="0" Grid.Column="3" Text="Z (mm)" FontWeight="Bold" HorizontalAlignment="Center" Foreground="{StaticResource AccentCyan}"/>
+                        <TextBlock Grid.Row="0" Grid.Column="4" Text="Roll°" FontWeight="Bold" HorizontalAlignment="Center" Foreground="{StaticResource TextMuted}"/>
+                        <TextBlock Grid.Row="0" Grid.Column="5" Text="Pitch°" FontWeight="Bold" HorizontalAlignment="Center" Foreground="{StaticResource TextMuted}"/>
+                        <TextBlock Grid.Row="0" Grid.Column="6" Text="Yaw°" FontWeight="Bold" HorizontalAlignment="Center" Foreground="{StaticResource TextMuted}"/>
+
+                        <TextBlock Grid.Row="1" Grid.Column="0" Text="Actual:" FontSize="10" Foreground="{StaticResource TextMuted}"/>
+                        <TextBlock Grid.Row="1" Grid.Column="1" Text="{Binding ActualX, StringFormat='{}{0:F1}'}" FontFamily="Consolas" HorizontalAlignment="Center"/>
+                        <TextBlock Grid.Row="1" Grid.Column="2" Text="{Binding ActualY, StringFormat='{}{0:F1}'}" FontFamily="Consolas" HorizontalAlignment="Center"/>
+                        <TextBlock Grid.Row="1" Grid.Column="3" Text="{Binding ActualZ, StringFormat='{}{0:F1}'}" FontFamily="Consolas" HorizontalAlignment="Center"/>
+                        <TextBlock Grid.Row="1" Grid.Column="4" Text="{Binding ActualRoll, StringFormat='{}{0:F1}'}" FontFamily="Consolas" HorizontalAlignment="Center"/>
+                        <TextBlock Grid.Row="1" Grid.Column="5" Text="{Binding ActualPitch, StringFormat='{}{0:F1}'}" FontFamily="Consolas" HorizontalAlignment="Center"/>
+                        <TextBlock Grid.Row="1" Grid.Column="6" Text="{Binding ActualYaw, StringFormat='{}{0:F1}'}" FontFamily="Consolas" HorizontalAlignment="Center"/>
+
+                        <TextBlock Grid.Row="2" Grid.Column="0" Text="Target:" FontSize="10" Foreground="{StaticResource TextMuted}"/>
+                        <TextBlock Grid.Row="2" Grid.Column="1" Text="{Binding TargetX, StringFormat='{}{0:F1}'}" FontFamily="Consolas" FontWeight="Bold" Foreground="{StaticResource AccentOrange}" HorizontalAlignment="Center"/>
+                        <TextBlock Grid.Row="2" Grid.Column="2" Text="{Binding TargetY, StringFormat='{}{0:F1}'}" FontFamily="Consolas" FontWeight="Bold" Foreground="{StaticResource AccentOrange}" HorizontalAlignment="Center"/>
+                        <TextBlock Grid.Row="2" Grid.Column="3" Text="{Binding TargetZ, StringFormat='{}{0:F1}'}" FontFamily="Consolas" FontWeight="Bold" Foreground="{StaticResource AccentOrange}" HorizontalAlignment="Center"/>
+                        <TextBlock Grid.Row="2" Grid.Column="4" Text="{Binding TargetRoll, StringFormat='{}{0:F1}'}" FontFamily="Consolas" FontWeight="Bold" Foreground="{StaticResource AccentOrange}" HorizontalAlignment="Center"/>
+                        <TextBlock Grid.Row="2" Grid.Column="5" Text="{Binding TargetPitch, StringFormat='{}{0:F1}'}" FontFamily="Consolas" FontWeight="Bold" Foreground="{StaticResource AccentOrange}" HorizontalAlignment="Center"/>
+                        <TextBlock Grid.Row="2" Grid.Column="6" Text="{Binding TargetYaw, StringFormat='{}{0:F1}'}" FontFamily="Consolas" FontWeight="Bold" Foreground="{StaticResource AccentOrange}" HorizontalAlignment="Center"/>
+                    </Grid>
+                </Border>
+            </Grid>
+
+            <!-- RIGHT CONTROL & VERIFICATION DOCK -->
+            <Border Grid.Column="1" Background="{StaticResource PanelBg}" BorderBrush="{StaticResource BorderDark}" BorderThickness="1,0,0,0">
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/> <!-- Emergency Stop Button -->
+                        <RowDefinition Height="Auto"/> <!-- E-Stop Recovery Panel -->
+                        <RowDefinition Height="Auto"/> <!-- System Actions Bar -->
+                        <RowDefinition Height="*"/>    <!-- Tabbed Control Panels -->
+                    </Grid.RowDefinitions>
+
+                    <!-- ZERO-LATENCY EMERGENCY STOP BUTTON -->
+                    <Border Grid.Row="0" Padding="16,12" Background="#1E1317" BorderBrush="#FF1744" BorderThickness="0,0,0,2">
+                        <Button x:Name="BtnEstop" PreviewMouseDown="BtnEstop_PreviewMouseDown" 
+                                Height="64" Background="{StaticResource DangerRed}" BorderBrush="#FF5252" BorderThickness="2">
+                            <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center">
+                                <TextBlock Text="🚨 EMERGENCY STOP" FontSize="18" FontWeight="Black" Foreground="#FFFFFF" HorizontalAlignment="Center"/>
+                                <TextBlock Text="Instant M112 Trapq Flush (SPACEBAR Hotkey)" FontSize="10" FontWeight="SemiBold" Foreground="#FFCDD2" HorizontalAlignment="Center" Margin="0,2,0,0"/>
+                            </StackPanel>
+                        </Button>
+                    </Border>
+
+                    <!-- E-STOP RECOVERY PANEL (VISIBLE WHEN ESTOP ACTIVE) -->
+                    <Border Grid.Row="1" Background="#2C1217" BorderBrush="#FF1744" BorderThickness="0,0,0,1" Padding="12,8">
+                        <Border.Style>
+                            <Style TargetType="Border">
+                                <Setter Property="Visibility" Value="Collapsed"/>
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding IsEstopActive}" Value="True">
+                                        <Setter Property="Visibility" Value="Visible"/>
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </Border.Style>
+                        <StackPanel>
+                            <TextBlock Text="EMERGENCY LOCKOUT ACTIVE" FontWeight="Black" FontSize="11" Foreground="#FF5252" HorizontalAlignment="Center" Margin="0,0,0,6"/>
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="*"/>
+                                </Grid.ColumnDefinitions>
+                                <Button Grid.Column="0" Content="🔄 1. CLEAR &amp; RESET MCU" Click="BtnReset_Click" Background="#C62828" Height="32" Margin="0,0,4,0" FontSize="11" FontWeight="Bold"/>
+                                <Button Grid.Column="1" Content="🏠 2. HOME ALL" Click="BtnHomeAll_Click" Background="#1565C0" Height="32" Margin="4,0,0,0" FontSize="11" FontWeight="Bold"/>
+                            </Grid>
+                        </StackPanel>
+                    </Border>
+
+                    <!-- SYSTEM CONTROL BUTTONS & GLOBAL ACTION BAR -->
+                    <Grid Grid.Row="2" Margin="16,8,16,6">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                        </Grid.RowDefinitions>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="*"/>
+                        </Grid.ColumnDefinitions>
+                        <Button Grid.Row="0" Grid.Column="0" Content="⚡ RESET MCU" Click="BtnReset_Click" Background="#2E7D32" Margin="0,0,3,0" Height="34"/>
+                        <Button Grid.Row="0" Grid.Column="1" Content="🏠 HOME ALL" Click="BtnHomeAll_Click" Background="#1565C0" Margin="3,0,3,0" Height="34"/>
+                        <Button Grid.Row="0" Grid.Column="2" Content="📍 SET CAD HOME" Click="BtnSetCadHome_Click" Background="#00838F" Margin="3,0,0,0" Height="34" ToolTip="Calibrate registers directly to CAD zero pose [0, -90, 180, 0, 0, 180]"/>
+
+                        <!-- Global Master Action Bar (Visible Across All Tabs) -->
+                        <StackPanel Grid.Row="1" Grid.ColumnSpan="3" Margin="0,8,0,0">
+                            <Button Content="🚀 SEND POSE TO ROBOT" Click="BtnExecutePose_Click" Height="38" Background="#00838F" FontSize="13" FontWeight="Bold" Margin="0,0,0,6" IsEnabled="{Binding CanSendPose}" ToolTip="Execute smoothed trajectory from current robot pose to staged Digital Twin pose (Spacebar = E-Stop)"/>
+                            
+                            <!-- 3-Mode Execution / Dispatch Selector -->
+                            <Border Background="{StaticResource CardBg}" CornerRadius="4" Padding="8,6" BorderBrush="{StaticResource BorderDark}" BorderThickness="1">
+                                <StackPanel>
+                                    <TextBlock Text="MOTION DISPATCH MODE" FontSize="9" FontWeight="Bold" Foreground="{StaticResource TextMuted}" Margin="0,0,0,4"/>
+                                    <UniformGrid Columns="3">
+                                        <RadioButton GroupName="DispatchMode" Content="SIMULATE" IsChecked="{Binding IsSimulateOnly, Mode=TwoWay}" Foreground="{StaticResource AccentCyan}" FontWeight="Bold" FontSize="11" ToolTip="Simulate Only: Move 3D twin freely without moving the physical robot until you click 'SEND POSE TO ROBOT'."/>
+                                        <RadioButton GroupName="DispatchMode" Content="ON RELEASE" IsChecked="{Binding IsSendOnRelease, Mode=TwoWay}" Foreground="{StaticResource AccentGreen}" FontWeight="Bold" FontSize="11" ToolTip="Send on Release: Drag the 3D twin or slider, and automatically send smoothed trajectory when mouse button is released."/>
+                                        <RadioButton GroupName="DispatchMode" Content="FOLLOW" IsChecked="{Binding IsContinuousStreaming, Mode=TwoWay}" Foreground="{StaticResource AccentOrange}" FontWeight="Bold" FontSize="11" ToolTip="Live Follow Mode: Continuously stream velocity- &amp; acceleration-blended waypoints at 50 Hz while dragging."/>
+                                    </UniformGrid>
+                                </StackPanel>
+                            </Border>
+                        </StackPanel>
+                    </Grid>
+
+                    <!-- TABBED CONTROL PANELS -->
+                    <TabControl Grid.Row="3" Background="{StaticResource PanelBg}" BorderThickness="0" Margin="8,4">
+
+                        <!-- TAB 1: JOINT JOGGING -->
+                        <TabItem Header="Joint Jog">
+                            <ScrollViewer VerticalScrollBarVisibility="Auto">
+                                <StackPanel Margin="8">
+                                    <TextBlock Text="JOINT ANGLES (J1 - J6)" FontWeight="Bold" Foreground="{StaticResource AccentCyan}" Margin="0,0,0,8"/>
+
+                                    <!-- Joint Step Size Selector -->
+                                    <StackPanel Orientation="Horizontal" Margin="0,0,0,12">
+                                        <TextBlock Text="Step Size:" VerticalAlignment="Center" Foreground="{StaticResource TextMuted}" Margin="0,0,8,0"/>
+                                        <RadioButton Content="0.1°" IsChecked="False" Click="RdoJointStep_Click" Tag="0.1" Margin="0,0,8,0" Foreground="{StaticResource TextLight}"/>
+                                        <RadioButton Content="1.0°" IsChecked="True" Click="RdoJointStep_Click" Tag="1.0" Margin="0,0,8,0" Foreground="{StaticResource TextLight}"/>
+                                        <RadioButton Content="5.0°" IsChecked="False" Click="RdoJointStep_Click" Tag="5.0" Margin="0,0,8,0" Foreground="{StaticResource TextLight}"/>
+                                        <RadioButton Content="10.0°" IsChecked="False" Click="RdoJointStep_Click" Tag="10.0" Foreground="{StaticResource TextLight}"/>
+                                    </StackPanel>
+
+                                    <!-- J1 Controls -->
+                                    <Border Background="{StaticResource CardBg}" CornerRadius="4" Padding="10" Margin="0,0,0,8">
+                                        <Grid>
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="70"/>
+                                                <ColumnDefinition Width="*"/>
+                                                <ColumnDefinition Width="Auto"/>
+                                            </Grid.ColumnDefinitions>
+                                            <StackPanel Grid.Column="0">
+                                                <TextBlock Text="J1 BASE" FontWeight="Bold" FontSize="11" Foreground="{StaticResource AccentCyan}"/>
+                                                <TextBlock Text="{Binding ActualJ1, StringFormat='{}{0:F1}°'}" FontFamily="Consolas" FontSize="12"/>
+                                            </StackPanel>
+                                            <Slider Grid.Column="1" Minimum="-170" Maximum="170" Value="{Binding TargetJ1, Mode=TwoWay}" VerticalAlignment="Center" Margin="8,0" IsEnabled="{Binding IsMotionAllowed}" Thumb.DragStarted="Slider_DragStarted" Thumb.DragCompleted="Slider_DragCompleted"/>
+                                            <StackPanel Grid.Column="2" Orientation="Horizontal">
+                                                <Button Content="-" Click="BtnJogJoint_Click" Tag="1,-1" Width="28" Height="28" Margin="0,0,4,0" IsEnabled="{Binding IsMotionAllowed}"/>
+                                                <Button Content="+" Click="BtnJogJoint_Click" Tag="1,1" Width="28" Height="28" IsEnabled="{Binding IsMotionAllowed}"/>
+                                            </StackPanel>
+                                        </Grid>
+                                    </Border>
+
+                                    <!-- J2 Controls -->
+                                    <Border Background="{StaticResource CardBg}" CornerRadius="4" Padding="10" Margin="0,0,0,8">
+                                        <Grid>
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="70"/>
+                                                <ColumnDefinition Width="*"/>
+                                                <ColumnDefinition Width="Auto"/>
+                                            </Grid.ColumnDefinitions>
+                                            <StackPanel Grid.Column="0">
+                                                <TextBlock Text="J2 SHOULDER" FontWeight="Bold" FontSize="11" Foreground="{StaticResource AccentCyan}"/>
+                                                <TextBlock Text="{Binding ActualJ2, StringFormat='{}{0:F1}°'}" FontFamily="Consolas" FontSize="12"/>
+                                            </StackPanel>
+                                            <Slider Grid.Column="1" Minimum="-150" Maximum="50" Value="{Binding TargetJ2, Mode=TwoWay}" VerticalAlignment="Center" Margin="8,0" IsEnabled="{Binding IsMotionAllowed}" Thumb.DragStarted="Slider_DragStarted" Thumb.DragCompleted="Slider_DragCompleted"/>
+                                            <StackPanel Grid.Column="2" Orientation="Horizontal">
+                                                <Button Content="-" Click="BtnJogJoint_Click" Tag="2,-1" Width="28" Height="28" Margin="0,0,4,0" IsEnabled="{Binding IsMotionAllowed}"/>
+                                                <Button Content="+" Click="BtnJogJoint_Click" Tag="2,1" Width="28" Height="28" IsEnabled="{Binding IsMotionAllowed}"/>
+                                            </StackPanel>
+                                        </Grid>
+                                    </Border>
+
+                                    <!-- J3 Controls -->
+                                    <Border Background="{StaticResource CardBg}" CornerRadius="4" Padding="10" Margin="0,0,0,8">
+                                        <Grid>
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="70"/>
+                                                <ColumnDefinition Width="*"/>
+                                                <ColumnDefinition Width="Auto"/>
+                                            </Grid.ColumnDefinitions>
+                                            <StackPanel Grid.Column="0">
+                                                <TextBlock Text="J3 ELBOW" FontWeight="Bold" FontSize="11" Foreground="{StaticResource AccentCyan}"/>
+                                                <TextBlock Text="{Binding ActualJ3, StringFormat='{}{0:F1}°'}" FontFamily="Consolas" FontSize="12"/>
+                                            </StackPanel>
+                                            <Slider Grid.Column="1" Minimum="65" Maximum="290" Value="{Binding TargetJ3, Mode=TwoWay}" VerticalAlignment="Center" Margin="8,0" IsEnabled="{Binding IsMotionAllowed}" Thumb.DragStarted="Slider_DragStarted" Thumb.DragCompleted="Slider_DragCompleted"/>
+                                            <StackPanel Grid.Column="2" Orientation="Horizontal">
+                                                <Button Content="-" Click="BtnJogJoint_Click" Tag="3,-1" Width="28" Height="28" Margin="0,0,4,0" IsEnabled="{Binding IsMotionAllowed}"/>
+                                                <Button Content="+" Click="BtnJogJoint_Click" Tag="3,1" Width="28" Height="28" IsEnabled="{Binding IsMotionAllowed}"/>
+                                            </StackPanel>
+                                        </Grid>
+                                    </Border>
+
+                                    <!-- J4 Controls -->
+                                    <Border Background="{StaticResource CardBg}" CornerRadius="4" Padding="10" Margin="0,0,0,8">
+                                        <Grid>
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="70"/>
+                                                <ColumnDefinition Width="*"/>
+                                                <ColumnDefinition Width="Auto"/>
+                                            </Grid.ColumnDefinitions>
+                                            <StackPanel Grid.Column="0">
+                                                <TextBlock Text="J4 FOREARM" FontWeight="Bold" FontSize="11" Foreground="{StaticResource AccentCyan}"/>
+                                                <TextBlock Text="{Binding ActualJ4, StringFormat='{}{0:F1}°'}" FontFamily="Consolas" FontSize="12"/>
+                                            </StackPanel>
+                                            <Slider Grid.Column="1" Minimum="-160" Maximum="160" Value="{Binding TargetJ4, Mode=TwoWay}" VerticalAlignment="Center" Margin="8,0" IsEnabled="{Binding IsMotionAllowed}" Thumb.DragStarted="Slider_DragStarted" Thumb.DragCompleted="Slider_DragCompleted"/>
+                                            <StackPanel Grid.Column="2" Orientation="Horizontal">
+                                                <Button Content="-" Click="BtnJogJoint_Click" Tag="4,-1" Width="28" Height="28" Margin="0,0,4,0" IsEnabled="{Binding IsMotionAllowed}"/>
+                                                <Button Content="+" Click="BtnJogJoint_Click" Tag="4,1" Width="28" Height="28" IsEnabled="{Binding IsMotionAllowed}"/>
+                                            </StackPanel>
+                                        </Grid>
+                                    </Border>
+
+                                    <!-- J5 Controls -->
+                                    <Border Background="{StaticResource CardBg}" CornerRadius="4" Padding="10" Margin="0,0,0,8">
+                                        <Grid>
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="70"/>
+                                                <ColumnDefinition Width="*"/>
+                                                <ColumnDefinition Width="Auto"/>
+                                            </Grid.ColumnDefinitions>
+                                            <StackPanel Grid.Column="0">
+                                                <TextBlock Text="J5 WRIST PITCH" FontWeight="Bold" FontSize="11" Foreground="{StaticResource AccentCyan}"/>
+                                                <TextBlock Text="{Binding ActualJ5, StringFormat='{}{0:F1}°'}" FontFamily="Consolas" FontSize="12"/>
+                                            </StackPanel>
+                                            <Slider Grid.Column="1" Minimum="-110" Maximum="110" Value="{Binding TargetJ5, Mode=TwoWay}" VerticalAlignment="Center" Margin="8,0" IsEnabled="{Binding IsMotionAllowed}" Thumb.DragStarted="Slider_DragStarted" Thumb.DragCompleted="Slider_DragCompleted"/>
+                                            <StackPanel Grid.Column="2" Orientation="Horizontal">
+                                                <Button Content="-" Click="BtnJogJoint_Click" Tag="5,-1" Width="28" Height="28" Margin="0,0,4,0" IsEnabled="{Binding IsMotionAllowed}"/>
+                                                <Button Content="+" Click="BtnJogJoint_Click" Tag="5,1" Width="28" Height="28" IsEnabled="{Binding IsMotionAllowed}"/>
+                                            </StackPanel>
+                                        </Grid>
+                                    </Border>
+
+                                    <!-- J6 Controls -->
+                                    <Border Background="{StaticResource CardBg}" CornerRadius="4" Padding="10" Margin="0,0,0,8">
+                                        <Grid>
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="70"/>
+                                                <ColumnDefinition Width="*"/>
+                                                <ColumnDefinition Width="Auto"/>
+                                            </Grid.ColumnDefinitions>
+                                            <StackPanel Grid.Column="0">
+                                                <TextBlock Text="J6 WRIST ROLL" FontWeight="Bold" FontSize="11" Foreground="{StaticResource AccentCyan}"/>
+                                                <TextBlock Text="{Binding ActualJ6, StringFormat='{}{0:F1}°'}" FontFamily="Consolas" FontSize="12"/>
+                                            </StackPanel>
+                                            <Slider Grid.Column="1" Minimum="0" Maximum="360" Value="{Binding TargetJ6, Mode=TwoWay}" VerticalAlignment="Center" Margin="8,0" IsEnabled="{Binding IsMotionAllowed}" Thumb.DragStarted="Slider_DragStarted" Thumb.DragCompleted="Slider_DragCompleted"/>
+                                            <StackPanel Grid.Column="2" Orientation="Horizontal">
+                                                <Button Content="-" Click="BtnJogJoint_Click" Tag="6,-1" Width="28" Height="28" Margin="0,0,4,0" IsEnabled="{Binding IsMotionAllowed}"/>
+                                                <Button Content="+" Click="BtnJogJoint_Click" Tag="6,1" Width="28" Height="28" IsEnabled="{Binding IsMotionAllowed}"/>
+                                            </StackPanel>
+                                        </Grid>
+                                    </Border>
+                                </StackPanel>
+                            </ScrollViewer>
+                        </TabItem>
+
+                        <!-- TAB 2: CARTESIAN JOGGING -->
+                        <TabItem Header="Cartesian">
+                            <StackPanel Margin="8">
+                                <!-- IK Solver Mode & Tool Attitude Control Card -->
+                                <Border Background="{StaticResource CardBg}" CornerRadius="6" Padding="10" Margin="0,0,0,12" BorderBrush="{StaticResource BorderDark}" BorderThickness="1">
+                                    <StackPanel>
+                                        <TextBlock Text="IK SOLVER &amp; TOOL ORIENTATION MODE" FontWeight="Bold" FontSize="11" Foreground="{StaticResource AccentOrange}" Margin="0,0,0,6"/>
+                                        <RadioButton GroupName="CartIkMode" Content="🎯 Mode 1: Probe Tip (Position Only, Free Wrist)" IsChecked="{Binding IsIkPositionOnly, Mode=TwoWay}" Foreground="{StaticResource TextLight}" Margin="0,0,0,4" ToolTip="Keeps tooltip strictly on X/Y/Z coordinate while allowing the wrist angles to relax naturally."/>
+                                        <RadioButton GroupName="CartIkMode" Content="📐 Mode 2: Steady Tool (Lock Rotational Attitude)" IsChecked="{Binding IsIkLockOrientation, Mode=TwoWay}" Foreground="{StaticResource AccentCyan}" FontWeight="Bold" Margin="0,0,0,6" ToolTip="Locks the tool rotational orientation in space and keeps it steady even in between trajectory waypoints."/>
+                                        <TextBlock Text="{Binding IkModeStatusText}" FontSize="10" FontFamily="Consolas" Foreground="{StaticResource AccentGreen}" Margin="0,0,0,8" TextWrapping="Wrap"/>
+                                        
+                                        <TextBlock Text="QUICK TOOL ATTITUDE PRESETS:" FontSize="10" FontWeight="Bold" Foreground="{StaticResource TextMuted}" Margin="0,0,0,4"/>
+                                        <UniformGrid Columns="3">
+                                            <Button Content="⬇️ VERTICAL" Click="BtnToolVertical_Click" Height="30" Margin="2" Background="#00695C" FontSize="10" FontWeight="Bold" IsEnabled="{Binding IsMotionAllowed}" ToolTip="Point tool straight down (-Z world) and lock steady (ideal for pen drawing or vertical pick-and-place)"/>
+                                            <Button Content="➡️ HORIZONTAL" Click="BtnToolHorizontal_Click" Height="30" Margin="2" Background="#1565C0" FontSize="10" FontWeight="Bold" IsEnabled="{Binding IsMotionAllowed}" ToolTip="Point tool straight forward (+X world) and lock steady"/>
+                                            <Button Content="🔒 LOCK POSE" Click="BtnLockCurrentAngle_Click" Height="30" Margin="2" Background="#37474F" FontSize="10" FontWeight="Bold" IsEnabled="{Binding IsMotionAllowed}" ToolTip="Lock the current tool Roll/Pitch/Yaw orientation"/>
+                                        </UniformGrid>
+                                    </StackPanel>
+                                </Border>
+
+                                <TextBlock Text="TCP CARTESIAN JOG (BASE FRAME)" FontWeight="Bold" Foreground="{StaticResource AccentCyan}" Margin="0,0,0,8"/>
+
+                                <!-- Step Size Selector -->
+                                <StackPanel Orientation="Horizontal" Margin="0,0,0,16">
+                                    <TextBlock Text="Step Size:" VerticalAlignment="Center" Foreground="{StaticResource TextMuted}" Margin="0,0,8,0"/>
+                                    <RadioButton Content="0.1 mm" IsChecked="False" Click="RdoCartStep_Click" Tag="0.1" Margin="0,0,8,0" Foreground="{StaticResource TextLight}"/>
+                                    <RadioButton Content="1.0 mm" IsChecked="False" Click="RdoCartStep_Click" Tag="1.0" Margin="0,0,8,0" Foreground="{StaticResource TextLight}"/>
+                                    <RadioButton Content="10.0 mm" IsChecked="True" Click="RdoCartStep_Click" Tag="10.0" Margin="0,0,8,0" Foreground="{StaticResource TextLight}"/>
+                                    <RadioButton Content="50.0 mm" IsChecked="False" Click="RdoCartStep_Click" Tag="50.0" Foreground="{StaticResource TextLight}"/>
+                                </StackPanel>
+
+                                <!-- X / Y / Z Jog Grid -->
+                                <UniformGrid Columns="3" Margin="0,0,0,16">
+                                    <Button Content="+X" Click="BtnJogCart_Click" Tag="X,1" Height="44" Margin="4" Background="#881B24" FontSize="14" IsEnabled="{Binding IsMotionAllowed}"/>
+                                    <Button Content="+Y" Click="BtnJogCart_Click" Tag="Y,1" Height="44" Margin="4" Background="#1B5E20" FontSize="14" IsEnabled="{Binding IsMotionAllowed}"/>
+                                    <Button Content="+Z" Click="BtnJogCart_Click" Tag="Z,1" Height="44" Margin="4" Background="#0D47A1" FontSize="14" IsEnabled="{Binding IsMotionAllowed}"/>
+
+                                    <Button Content="-X" Click="BtnJogCart_Click" Tag="X,-1" Height="44" Margin="4" Background="#881B24" FontSize="14" IsEnabled="{Binding IsMotionAllowed}"/>
+                                    <Button Content="-Y" Click="BtnJogCart_Click" Tag="Y,-1" Height="44" Margin="4" Background="#1B5E20" FontSize="14" IsEnabled="{Binding IsMotionAllowed}"/>
+                                    <Button Content="-Z" Click="BtnJogCart_Click" Tag="Z,-1" Height="44" Margin="4" Background="#0D47A1" FontSize="14" IsEnabled="{Binding IsMotionAllowed}"/>
+                                </UniformGrid>
+
+                                <TextBlock Text="ORIENTATION (ROLL, PITCH, YAW)" FontWeight="Bold" Foreground="{StaticResource AccentCyan}" Margin="0,0,0,8"/>
+                                <UniformGrid Columns="3" Margin="0,0,0,16">
+                                    <Button Content="+Roll" Click="BtnJogCart_Click" Tag="RX,1" Height="36" Margin="4" IsEnabled="{Binding IsMotionAllowed}"/>
+                                    <Button Content="+Pitch" Click="BtnJogCart_Click" Tag="RY,1" Height="36" Margin="4" IsEnabled="{Binding IsMotionAllowed}"/>
+                                    <Button Content="+Yaw" Click="BtnJogCart_Click" Tag="RZ,1" Height="36" Margin="4" IsEnabled="{Binding IsMotionAllowed}"/>
+
+                                    <Button Content="-Roll" Click="BtnJogCart_Click" Tag="RX,-1" Height="36" Margin="4" IsEnabled="{Binding IsMotionAllowed}"/>
+                                    <Button Content="-Pitch" Click="BtnJogCart_Click" Tag="RY,-1" Height="36" Margin="4" IsEnabled="{Binding IsMotionAllowed}"/>
+                                    <Button Content="-Yaw" Click="BtnJogCart_Click" Tag="RZ,-1" Height="36" Margin="4" IsEnabled="{Binding IsMotionAllowed}"/>
+                                </UniformGrid>
+                            </StackPanel>
+                        </TabItem>
+
+                        <!-- TAB 3: HOMING & PERSISTENT CALIBRATION -->
+                        <TabItem Header="Calibration">
+                            <ScrollViewer VerticalScrollBarVisibility="Auto">
+                                <StackPanel Margin="8">
+                                    <TextBlock Text="PERSISTENT HOMING OFFSET TRIMS" FontWeight="Bold" Foreground="{StaticResource AccentCyan}" Margin="0,0,0,4"/>
+                                    <TextBlock Text="Compensates for physical switch click hysteresis and mechanical placement without firmware re-flashing." TextWrapping="Wrap" FontSize="11" Foreground="{StaticResource TextMuted}" Margin="0,0,0,12"/>
+
+                                    <!-- Joint Trim Rows J1 - J6 -->
+                                    <Border Background="{StaticResource CardBg}" CornerRadius="4" Padding="8" Margin="0,0,0,6">
+                                        <Grid>
+                                            <Grid.ColumnDefinitions><ColumnDefinition Width="70"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                                            <TextBlock Grid.Column="0" Text="J1 TRIM" FontWeight="Bold" VerticalAlignment="Center"/>
+                                            <TextBlock Grid.Column="1" Text="{Binding TrimJ1, StringFormat='{}{0:+0.000;-0.000;0.000}°'}" FontFamily="Consolas" VerticalAlignment="Center" Foreground="{StaticResource AccentCyan}"/>
+                                            <StackPanel Grid.Column="2" Orientation="Horizontal">
+                                                <Button Content="-1.0°" Click="BtnTrimNudge_Click" Tag="1,-1.0" Margin="0,0,2,0" Padding="4,2" FontSize="10"/>
+                                                <Button Content="-0.1°" Click="BtnTrimNudge_Click" Tag="1,-0.1" Margin="0,0,4,0" Padding="4,2" FontSize="10"/>
+                                                <Button Content="+0.1°" Click="BtnTrimNudge_Click" Tag="1,0.1" Margin="0,0,2,0" Padding="4,2" FontSize="10"/>
+                                                <Button Content="+1.0°" Click="BtnTrimNudge_Click" Tag="1,1.0" Padding="4,2" FontSize="10"/>
+                                            </StackPanel>
+                                        </Grid>
+                                    </Border>
+
+                                    <Border Background="{StaticResource CardBg}" CornerRadius="4" Padding="8" Margin="0,0,0,6">
+                                        <Grid>
+                                            <Grid.ColumnDefinitions><ColumnDefinition Width="70"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                                            <TextBlock Grid.Column="0" Text="J2 TRIM" FontWeight="Bold" VerticalAlignment="Center"/>
+                                            <TextBlock Grid.Column="1" Text="{Binding TrimJ2, StringFormat='{}{0:+0.000;-0.000;0.000}°'}" FontFamily="Consolas" VerticalAlignment="Center" Foreground="{StaticResource AccentCyan}"/>
+                                            <StackPanel Grid.Column="2" Orientation="Horizontal">
+                                                <Button Content="-1.0°" Click="BtnTrimNudge_Click" Tag="2,-1.0" Margin="0,0,2,0" Padding="4,2" FontSize="10"/>
+                                                <Button Content="-0.1°" Click="BtnTrimNudge_Click" Tag="2,-0.1" Margin="0,0,4,0" Padding="4,2" FontSize="10"/>
+                                                <Button Content="+0.1°" Click="BtnTrimNudge_Click" Tag="2,0.1" Margin="0,0,2,0" Padding="4,2" FontSize="10"/>
+                                                <Button Content="+1.0°" Click="BtnTrimNudge_Click" Tag="2,1.0" Padding="4,2" FontSize="10"/>
+                                            </StackPanel>
+                                        </Grid>
+                                    </Border>
+
+                                    <Border Background="{StaticResource CardBg}" CornerRadius="4" Padding="8" Margin="0,0,0,6">
+                                        <Grid>
+                                            <Grid.ColumnDefinitions><ColumnDefinition Width="70"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                                            <TextBlock Grid.Column="0" Text="J3 TRIM" FontWeight="Bold" VerticalAlignment="Center"/>
+                                            <TextBlock Grid.Column="1" Text="{Binding TrimJ3, StringFormat='{}{0:+0.000;-0.000;0.000}°'}" FontFamily="Consolas" VerticalAlignment="Center" Foreground="{StaticResource AccentCyan}"/>
+                                            <StackPanel Grid.Column="2" Orientation="Horizontal">
+                                                <Button Content="-1.0°" Click="BtnTrimNudge_Click" Tag="3,-1.0" Margin="0,0,2,0" Padding="4,2" FontSize="10"/>
+                                                <Button Content="-0.1°" Click="BtnTrimNudge_Click" Tag="3,-0.1" Margin="0,0,4,0" Padding="4,2" FontSize="10"/>
+                                                <Button Content="+0.1°" Click="BtnTrimNudge_Click" Tag="3,0.1" Margin="0,0,2,0" Padding="4,2" FontSize="10"/>
+                                                <Button Content="+1.0°" Click="BtnTrimNudge_Click" Tag="3,1.0" Padding="4,2" FontSize="10"/>
+                                            </StackPanel>
+                                        </Grid>
+                                    </Border>
+
+                                    <Border Background="{StaticResource CardBg}" CornerRadius="4" Padding="8" Margin="0,0,0,6">
+                                        <Grid>
+                                            <Grid.ColumnDefinitions><ColumnDefinition Width="70"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                                            <TextBlock Grid.Column="0" Text="J4 TRIM" FontWeight="Bold" VerticalAlignment="Center"/>
+                                            <TextBlock Grid.Column="1" Text="{Binding TrimJ4, StringFormat='{}{0:+0.000;-0.000;0.000}°'}" FontFamily="Consolas" VerticalAlignment="Center" Foreground="{StaticResource AccentCyan}"/>
+                                            <StackPanel Grid.Column="2" Orientation="Horizontal">
+                                                <Button Content="-1.0°" Click="BtnTrimNudge_Click" Tag="4,-1.0" Margin="0,0,2,0" Padding="4,2" FontSize="10"/>
+                                                <Button Content="-0.1°" Click="BtnTrimNudge_Click" Tag="4,-0.1" Margin="0,0,4,0" Padding="4,2" FontSize="10"/>
+                                                <Button Content="+0.1°" Click="BtnTrimNudge_Click" Tag="4,0.1" Margin="0,0,2,0" Padding="4,2" FontSize="10"/>
+                                                <Button Content="+1.0°" Click="BtnTrimNudge_Click" Tag="4,1.0" Padding="4,2" FontSize="10"/>
+                                            </StackPanel>
+                                        </Grid>
+                                    </Border>
+
+                                    <Border Background="{StaticResource CardBg}" CornerRadius="4" Padding="8" Margin="0,0,0,6">
+                                        <Grid>
+                                            <Grid.ColumnDefinitions><ColumnDefinition Width="70"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                                            <TextBlock Grid.Column="0" Text="J5 TRIM" FontWeight="Bold" VerticalAlignment="Center"/>
+                                            <TextBlock Grid.Column="1" Text="{Binding TrimJ5, StringFormat='{}{0:+0.000;-0.000;0.000}°'}" FontFamily="Consolas" VerticalAlignment="Center" Foreground="{StaticResource AccentCyan}"/>
+                                            <StackPanel Grid.Column="2" Orientation="Horizontal">
+                                                <Button Content="-1.0°" Click="BtnTrimNudge_Click" Tag="5,-1.0" Margin="0,0,2,0" Padding="4,2" FontSize="10"/>
+                                                <Button Content="-0.1°" Click="BtnTrimNudge_Click" Tag="5,-0.1" Margin="0,0,4,0" Padding="4,2" FontSize="10"/>
+                                                <Button Content="+0.1°" Click="BtnTrimNudge_Click" Tag="5,0.1" Margin="0,0,2,0" Padding="4,2" FontSize="10"/>
+                                                <Button Content="+1.0°" Click="BtnTrimNudge_Click" Tag="5,1.0" Padding="4,2" FontSize="10"/>
+                                            </StackPanel>
+                                        </Grid>
+                                    </Border>
+
+                                    <Border Background="{StaticResource CardBg}" CornerRadius="4" Padding="8" Margin="0,0,0,12">
+                                        <Grid>
+                                            <Grid.ColumnDefinitions><ColumnDefinition Width="70"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                                            <TextBlock Grid.Column="0" Text="J6 TRIM" FontWeight="Bold" VerticalAlignment="Center"/>
+                                            <TextBlock Grid.Column="1" Text="{Binding TrimJ6, StringFormat='{}{0:+0.000;-0.000;0.000}°'}" FontFamily="Consolas" VerticalAlignment="Center" Foreground="{StaticResource AccentCyan}"/>
+                                            <StackPanel Grid.Column="2" Orientation="Horizontal">
+                                                <Button Content="-1.0°" Click="BtnTrimNudge_Click" Tag="6,-1.0" Margin="0,0,2,0" Padding="4,2" FontSize="10"/>
+                                                <Button Content="-0.1°" Click="BtnTrimNudge_Click" Tag="6,-0.1" Margin="0,0,4,0" Padding="4,2" FontSize="10"/>
+                                                <Button Content="+0.1°" Click="BtnTrimNudge_Click" Tag="6,0.1" Margin="0,0,2,0" Padding="4,2" FontSize="10"/>
+                                                <Button Content="+1.0°" Click="BtnTrimNudge_Click" Tag="6,1.0" Padding="4,2" FontSize="10"/>
+                                            </StackPanel>
+                                        </Grid>
+                                    </Border>
+
+                                    <!-- Save & Refresh Buttons -->
+                                    <Grid>
+                                        <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                                        <Button Grid.Column="0" Content="🔄 REFRESH TRIMS" Click="BtnRefreshTrims_Click" Background="#37474F" Margin="0,0,4,0" Height="36"/>
+                                        <Button Grid.Column="1" Content="💾 SAVE TO PI" Click="BtnSaveTrims_Click" Background="#00796B" Margin="4,0,0,0" Height="36"/>
+                                    </Grid>
+                                </StackPanel>
+                            </ScrollViewer>
+                        </TabItem>
+
+                        <!-- TAB 4: GRIPPER -->
+                        <TabItem Header="Gripper">
+                            <StackPanel Margin="8">
+                                <TextBlock Text="RC SERVO GRIPPER ACTUATION" FontWeight="Bold" Foreground="{StaticResource AccentCyan}" Margin="0,0,0,8"/>
+
+                                <Border Background="{StaticResource CardBg}" CornerRadius="4" Padding="12" Margin="0,0,0,12">
+                                    <StackPanel>
+                                        <Grid Margin="0,0,0,8">
+                                            <TextBlock Text="Jaw Gap:" Foreground="{StaticResource TextMuted}"/>
+                                            <TextBlock Text="{Binding GripperMm, StringFormat='{}{0:F1} mm'}" HorizontalAlignment="Right" FontFamily="Consolas" FontWeight="Bold" Foreground="{StaticResource AccentCyan}"/>
+                                        </Grid>
+                                        <Slider Minimum="0" Maximum="180" Value="{Binding GripperAngle, Mode=TwoWay}" Thumb.DragCompleted="GripperSlider_DragCompleted" Margin="0,0,0,12"/>
+                                        <UniformGrid Columns="3">
+                                            <Button Content="CLOSE (0°)" Click="BtnGripperClose_Click" Margin="2" Height="32"/>
+                                            <Button Content="MID (90°)" Click="BtnGripperMid_Click" Margin="2" Height="32"/>
+                                            <Button Content="OPEN (180°)" Click="BtnGripperOpen_Click" Margin="2" Height="32"/>
+                                        </UniformGrid>
+                                    </StackPanel>
+                                </Border>
+                            </StackPanel>
+                        </TabItem>
+
+                        <!-- TAB: SPEED & SAFETY LIMITS -->
+                        <TabItem Header="Speed Limits">
+                            <ScrollViewer VerticalScrollBarVisibility="Auto">
+                                <StackPanel Margin="10">
+                                    <TextBlock Text="HARDWARE SPEED &amp; SAFETY LIMITS" FontWeight="Bold" FontSize="13" Foreground="{StaticResource AccentCyan}" Margin="0,0,0,4"/>
+                                    <TextBlock Text="Adjust per-joint speed limits to match 6-axis trapq motion boundaries." FontSize="11" Foreground="{StaticResource TextMuted}" Margin="0,0,0,12" TextWrapping="Wrap"/>
+
+                                    <!-- Master Speed Scale -->
+                                    <Border Background="{StaticResource CardBg}" CornerRadius="6" Padding="12" Margin="0,0,0,10">
+                                        <StackPanel>
+                                            <Grid Margin="0,0,0,6">
+                                                <TextBlock Text="MASTER SPEED SCALING" FontWeight="Bold" Foreground="{StaticResource AccentOrange}"/>
+                                                <TextBlock Text="{Binding SpeedScale, StringFormat='{}{0:P0}'}" FontFamily="Consolas" FontWeight="Bold" HorizontalAlignment="Right" Foreground="{StaticResource AccentOrange}"/>
+                                            </Grid>
+                                            <Slider Minimum="0.1" Maximum="1.0" Value="{Binding SpeedScale, Mode=TwoWay}" SmallChange="0.05" LargeChange="0.1" TickFrequency="0.05" IsSnapToTickEnabled="True"/>
+                                        </StackPanel>
+                                    </Border>
+
+                                    <!-- Staged Move Duration -->
+                                    <Border Background="{StaticResource CardBg}" CornerRadius="6" Padding="12" Margin="0,0,0,10">
+                                        <StackPanel>
+                                            <Grid Margin="0,0,0,6">
+                                                <TextBlock Text="STAGED MOVE DURATION (DISCRETE)" FontWeight="Bold" Foreground="{StaticResource AccentGreen}"/>
+                                                <TextBlock Text="{Binding MoveDuration, StringFormat='{}{0:F1} s'}" FontFamily="Consolas" FontWeight="Bold" HorizontalAlignment="Right" Foreground="{StaticResource AccentGreen}"/>
+                                            </Grid>
+                                            <Slider Minimum="0.2" Maximum="5.0" Value="{Binding MoveDuration, Mode=TwoWay}" SmallChange="0.1" LargeChange="0.5"/>
+                                        </StackPanel>
+                                    </Border>
+
+                                    <!-- Trajectory Smoothing & Waypoint Blending Time Constant -->
+                                    <Border Background="{StaticResource CardBg}" CornerRadius="6" Padding="12" Margin="0,0,0,10">
+                                        <StackPanel>
+                                            <Grid Margin="0,0,0,6">
+                                                <TextBlock Text="TRAJECTORY SMOOTHING &amp; BLENDING" FontWeight="Bold" Foreground="{StaticResource AccentCyan}"/>
+                                                <TextBlock Text="{Binding SmoothingTimeConstant, StringFormat='{}{0:F2} s'}" FontFamily="Consolas" FontWeight="Bold" HorizontalAlignment="Right" Foreground="{StaticResource AccentCyan}"/>
+                                            </Grid>
+                                            <Slider Minimum="0.05" Maximum="0.35" Value="{Binding SmoothingTimeConstant, Mode=TwoWay}" SmallChange="0.01" LargeChange="0.05"/>
+                                            <TextBlock Text="Controls client-side 50 Hz second-order velocity &amp; acceleration blending to eliminate Follow stutter." FontSize="10" Foreground="{StaticResource TextMuted}" Margin="0,4,0,0" TextWrapping="Wrap"/>
+                                        </StackPanel>
+                                    </Border>
+
+                                    <!-- J1..J6 Individual Limits -->
+                                    <TextBlock Text="PER-JOINT MAXIMUM SPEED (DEG/S)" FontWeight="Bold" FontSize="11" Foreground="{StaticResource TextLight}" Margin="0,4,0,8"/>
+
+                                    <Border Background="{StaticResource CardBg}" CornerRadius="4" Padding="10" Margin="0,0,0,6">
+                                        <Grid>
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="110"/>
+                                                <ColumnDefinition Width="*"/>
+                                                <ColumnDefinition Width="55"/>
+                                            </Grid.ColumnDefinitions>
+                                            <TextBlock Text="J1 Base Limit" FontWeight="Bold" VerticalAlignment="Center"/>
+                                            <Slider Grid.Column="1" Minimum="10" Maximum="120" Value="{Binding SpeedLimitJ1, Mode=TwoWay}" VerticalAlignment="Center" Margin="8,0"/>
+                                            <TextBlock Grid.Column="2" Text="{Binding SpeedLimitJ1, StringFormat='{}{0:F0}°/s'}" FontFamily="Consolas" HorizontalAlignment="Right" VerticalAlignment="Center"/>
+                                        </Grid>
+                                    </Border>
+
+                                    <Border Background="{StaticResource CardBg}" CornerRadius="4" Padding="10" Margin="0,0,0,6">
+                                        <Grid>
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="110"/>
+                                                <ColumnDefinition Width="*"/>
+                                                <ColumnDefinition Width="55"/>
+                                            </Grid.ColumnDefinitions>
+                                            <TextBlock Text="J2 Shoulder Limit" FontWeight="Bold" VerticalAlignment="Center"/>
+                                            <Slider Grid.Column="1" Minimum="5" Maximum="60" Value="{Binding SpeedLimitJ2, Mode=TwoWay}" VerticalAlignment="Center" Margin="8,0"/>
+                                            <TextBlock Grid.Column="2" Text="{Binding SpeedLimitJ2, StringFormat='{}{0:F0}°/s'}" FontFamily="Consolas" HorizontalAlignment="Right" VerticalAlignment="Center"/>
+                                        </Grid>
+                                    </Border>
+
+                                    <Border Background="{StaticResource CardBg}" CornerRadius="4" Padding="10" Margin="0,0,0,6">
+                                        <Grid>
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="110"/>
+                                                <ColumnDefinition Width="*"/>
+                                                <ColumnDefinition Width="55"/>
+                                            </Grid.ColumnDefinitions>
+                                            <TextBlock Text="J3 Elbow Limit" FontWeight="Bold" VerticalAlignment="Center"/>
+                                            <Slider Grid.Column="1" Minimum="5" Maximum="60" Value="{Binding SpeedLimitJ3, Mode=TwoWay}" VerticalAlignment="Center" Margin="8,0"/>
+                                            <TextBlock Grid.Column="2" Text="{Binding SpeedLimitJ3, StringFormat='{}{0:F0}°/s'}" FontFamily="Consolas" HorizontalAlignment="Right" VerticalAlignment="Center"/>
+                                        </Grid>
+                                    </Border>
+
+                                    <Border Background="{StaticResource CardBg}" CornerRadius="4" Padding="10" Margin="0,0,0,6">
+                                        <Grid>
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="110"/>
+                                                <ColumnDefinition Width="*"/>
+                                                <ColumnDefinition Width="55"/>
+                                            </Grid.ColumnDefinitions>
+                                            <TextBlock Text="J4 Forearm Limit" FontWeight="Bold" VerticalAlignment="Center"/>
+                                            <Slider Grid.Column="1" Minimum="10" Maximum="80" Value="{Binding SpeedLimitJ4, Mode=TwoWay}" VerticalAlignment="Center" Margin="8,0"/>
+                                            <TextBlock Grid.Column="2" Text="{Binding SpeedLimitJ4, StringFormat='{}{0:F0}°/s'}" FontFamily="Consolas" HorizontalAlignment="Right" VerticalAlignment="Center"/>
+                                        </Grid>
+                                    </Border>
+
+                                    <Border Background="{StaticResource CardBg}" CornerRadius="4" Padding="10" Margin="0,0,0,6">
+                                        <Grid>
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="110"/>
+                                                <ColumnDefinition Width="*"/>
+                                                <ColumnDefinition Width="55"/>
+                                            </Grid.ColumnDefinitions>
+                                            <TextBlock Text="J5 Wrist Pitch" FontWeight="Bold" VerticalAlignment="Center"/>
+                                            <Slider Grid.Column="1" Minimum="10" Maximum="80" Value="{Binding SpeedLimitJ5, Mode=TwoWay}" VerticalAlignment="Center" Margin="8,0"/>
+                                            <TextBlock Grid.Column="2" Text="{Binding SpeedLimitJ5, StringFormat='{}{0:F0}°/s'}" FontFamily="Consolas" HorizontalAlignment="Right" VerticalAlignment="Center"/>
+                                        </Grid>
+                                    </Border>
+
+                                    <Border Background="{StaticResource CardBg}" CornerRadius="4" Padding="10" Margin="0,0,0,10">
+                                        <Grid>
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="110"/>
+                                                <ColumnDefinition Width="*"/>
+                                                <ColumnDefinition Width="55"/>
+                                            </Grid.ColumnDefinitions>
+                                            <TextBlock Text="J6 Wrist Roll" FontWeight="Bold" VerticalAlignment="Center"/>
+                                            <Slider Grid.Column="1" Minimum="10" Maximum="120" Value="{Binding SpeedLimitJ6, Mode=TwoWay}" VerticalAlignment="Center" Margin="8,0"/>
+                                            <TextBlock Grid.Column="2" Text="{Binding SpeedLimitJ6, StringFormat='{}{0:F0}°/s'}" FontFamily="Consolas" HorizontalAlignment="Right" VerticalAlignment="Center"/>
+                                        </Grid>
+                                    </Border>
+                                </StackPanel>
+                            </ScrollViewer>
+                        </TabItem>
+
+                        <!-- TAB 5: DUAL-LINK RX/TX DIAGNOSTICS & LOGS -->
+                        <TabItem Header="📡 RX/TX Logs">
+                            <Grid Margin="8">
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto"/> <!-- Active MCU Error Banner -->
+                                    <RowDefinition Height="Auto"/> <!-- Action Toolbar -->
+                                    <RowDefinition Height="Auto"/> <!-- Suite <-> RPi Header -->
+                                    <RowDefinition Height="*"/>    <!-- Suite <-> RPi Feed -->
+                                    <RowDefinition Height="Auto"/> <!-- RPi <-> MCU Header -->
+                                    <RowDefinition Height="*"/>    <!-- RPi <-> MCU Feed -->
+                                    <RowDefinition Height="Auto"/> <!-- Local App Log Header -->
+                                    <RowDefinition Height="95"/>   <!-- Local App Log Feed -->
+                                </Grid.RowDefinitions>
+
+                                <!-- Active Klipper / MCU Error Banner -->
+                                <Border Grid.Row="0" Background="#450A0A" BorderBrush="#EF4444" BorderThickness="1" CornerRadius="4" Padding="8,6" Margin="0,0,0,6">
+                                    <Border.Style>
+                                        <Style TargetType="Border">
+                                            <Setter Property="Visibility" Value="Collapsed"/>
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding HasMcuError}" Value="True">
+                                                    <Setter Property="Visibility" Value="Visible"/>
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </Border.Style>
+                                    <TextBlock Text="{Binding LastMcuError}" Foreground="#FCA5A5" FontWeight="Bold" FontFamily="Consolas" FontSize="11" TextWrapping="Wrap"/>
+                                </Border>
+
+                                <!-- Top Toolbar -->
+                                <Grid Grid.Row="1" Margin="0,0,0,6">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <Button Grid.Column="0" Content="📡 OPEN FULL PACKET STREAM WINDOW" Click="BtnDebugStream_Click" Background="#1E293B" Margin="0,0,6,0" Padding="8,4" FontSize="10" FontWeight="Bold"/>
+                                    <Button Grid.Column="1" Content="🗑️ CLEAR ALL" Click="BtnClearLog_Click" Background="#7F1D1D" Padding="8,4" FontSize="10" FontWeight="Bold"/>
+                                </Grid>
+
+                                <!-- Channel 1: Suite <-> RPi Daemon -->
+                                <TextBlock Grid.Row="2" Text="💻 SUITE / TOUCH ↔ RPI DAEMON (WS :8765 / UDP :8766)" FontWeight="Bold" FontSize="10" Foreground="{StaticResource AccentCyan}" Margin="0,2,0,3"/>
+                                <TextBox Grid.Row="3" Text="{Binding SuiteRpiLogFeed, Mode=OneWay}" IsReadOnly="True" VerticalScrollBarVisibility="Auto" TextWrapping="Wrap" FontFamily="Consolas" FontSize="10.5" Background="#0D0F14" Foreground="#38BDF8" BorderBrush="{StaticResource BorderDark}" Padding="6" Margin="0,0,0,6"/>
+
+                                <!-- Channel 2: RPi Daemon <-> Klipper / MCU -->
+                                <TextBlock Grid.Row="4" Text="🔌 RPI DAEMON ↔ KLIPPER / MCU (klippy.serial @ 250k)" FontWeight="Bold" FontSize="10" Foreground="{StaticResource AccentGreen}" Margin="0,2,0,3"/>
+                                <TextBox Grid.Row="5" Text="{Binding RpiMcuLogFeed, Mode=OneWay}" IsReadOnly="True" VerticalScrollBarVisibility="Auto" TextWrapping="Wrap" FontFamily="Consolas" FontSize="10.5" Background="#0D0F14" Foreground="#34D399" BorderBrush="{StaticResource BorderDark}" Padding="6" Margin="0,0,0,6"/>
+
+                                <!-- Channel 3: Client Kinematics & System Log -->
+                                <TextBlock Grid.Row="6" Text="📋 CLIENT KINEMATICS &amp; SYSTEM EVENTS" FontWeight="Bold" FontSize="10" Foreground="{StaticResource AccentOrange}" Margin="0,2,0,3"/>
+                                <TextBox Grid.Row="7" Text="{Binding LogFeed, Mode=OneWay}" IsReadOnly="True" VerticalScrollBarVisibility="Auto" TextWrapping="Wrap" FontFamily="Consolas" FontSize="10.5" Background="#141418" BorderBrush="{StaticResource BorderDark}" Padding="6"/>
+                            </Grid>
+                        </TabItem>
+                    </TabControl>
+                </Grid>
+            </Border>
+        </Grid>
+
+        <!-- FULL-SCREEN PULSING RED OVERLAY FOR EMERGENCY STOP VISIBILITY -->
+        <Border x:Name="EstopPulsingOverlay"
+                Grid.Row="0" Grid.RowSpan="3"
+                Background="#B71C1C"
+                Opacity="0.0"
+                IsHitTestVisible="False"/>
+
+        <Border x:Name="EstopPulseBorder"
+                Grid.Row="0" Grid.RowSpan="3"
+                BorderBrush="#FF1744"
+                BorderThickness="6"
+                Opacity="0.0"
+                IsHitTestVisible="False"/>
+    </Grid>
+</Window>

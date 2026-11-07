@@ -6,7 +6,7 @@
 
 The PAROL6 6-DOF robotic control ecosystem implements an ultra-low latency, event-driven motion pipeline designed to eliminate trajectory jitter, prevent communication buffer overflows, and enforce strict fail-safe motor shutdown. 
 
-Motion and control are cleanly partitioned across a **Hybrid Dual-Transport Layer** between the Windows Control Suite and the Raspberry Pi 5 Daemon, and a paced, bit-packed serial transport to the ATmega2560 hardware step core:
+Motion and control are cleanly partitioned across a **3-Tier Topology** between the Windows Control Suite, the Raspberry Pi 5 Brain Daemon, and the 6-Axis Klipper Motion Core:
 
 ```
 ┌────────────────────────────────────────────────────────┐
@@ -20,29 +20,31 @@ Motion and control are cleanly partitioned across a **Hybrid Dual-Transport Laye
               │ Unbuffered 50–100 Hz       │ HOME, ESTOP, RESET, TRIMS
               ▼                            ▼
 ┌────────────────────────────────────────────────────────┐
-│             Raspberry Pi 5 Host Daemon                 │
+│      Raspberry Pi 5 Host Brain Daemon (robot_engine)   │
 │  - Channel A: Async WebSocket Server (Port 8765)       │
 │  - Channel B: Zero-Allocation UDP Server (Port 8766)   │
 │  - Host-Side Jitter Buffer (64 slots, 60 ms horizon)   │
 │  - Deterministic 100 Hz (10.0 ms) Sampling Worker      │
-│  - Real-Time DLS / LM Inverse Kinematics (<1.0 ms)     │
-│  - Dynamic Per-Joint Speed & Acceleration Clamping     │
-│  - Microsecond Master Clock Estimator & Linear Filter  │
-│  - Tier 1 Watchdog: 150 ms Inactivity Controlled Hold  │
-│  - Paced UART Chunk Streamer (<= 2 chunks / 5 ms tick) │
+│  - Real-Time Analytical + DLS Inverse Kinematics (<1 ms)│
+│  - Deterministic Spherical Wrist Branch Locking         │
+│  - |J5| < 1.0° Collinear Singularity Crossing Guard     │
+│  - validate_and_lock_branch() (3.0°/10ms Spike Clamp)   │
+│  - Synchronized 6-Axis Adaptive 1-Euro Filter           │
+│  - Persistent Trims & Calibration Manager (offsets.json)│
+│  - Klipper Non-Blocking PTY Bridge (/tmp/printer)      │
 └───────────────────────────┬────────────────────────────┘
-                            │ USB-UART @ 250,000 Baud (11-byte Frames)
-                            │ [0x55][axis_dir:u8][clock:u32][count:u16][interval:u16][add:i8]
+                            │ Non-Blocking PTY /tmp/printer
+                            │ Coordinated 6-Axis G-code (G1 X Y Z A B C F)
+                            │ Low-Latency Buffer (buffer_time_low: 0.020s)
                             ▼
 ┌────────────────────────────────────────────────────────┐
-│      ATmega2560 + RAMPS 1.4 Hardware Step Core         │
-│  - Virtualized 32-bit Master Clock (16 MHz Timer 1)    │
-│  - Dynamic Compare Match OCR1A Hardware Interrupts     │
-│  - Direct Register Step Generation (PORTx / DDRx)      │
-│  - 2.5 µs Deterministic Pulse Width for TI DRV8825     │
-│  - 6x Ring Buffers (64 chunks capacity per joint)      │
-│  - Tier 2 Watchdog: 250 ms Inactivity Coil Shutdown    │
-│  - Instant Homing Position Invalidation on E-Stop       │
+│       6-Axis Klipper Core (Pi Host + ATmega2560 MCU)   │
+│  - Pi Host (Klippy): 6-Axis trapq, itersolve, cartesian│
+│  - Lookahead Buffer Horizon: 20–50 ms (Zero Stutter)   │
+│  - USB-UART @ 250,000 Baud with Microsecond Scheduling │
+│  - ATmega2560 + RAMPS 1.4: Stock Compiled Klipper C    │
+│  - Microsecond-Accurate Pulse Engine (AVR Assembly)    │
+│  - Hardware E-Stop via M112 (<1 ms Shutdown)           │
 └────────────────────────────────────────────────────────┘
 ```
 
@@ -222,40 +224,40 @@ stateDiagram-v2
 
 ---
 
-## 5. Microcontroller Serial Protocol (USB-UART @ 250,000 Baud)
+## 5. 6-Axis Klipper Motion Pipe Architecture (`gear2nd-droid/klipper`)
 
-### 5.1 Compact Step Chunk Frame (`0x55`, 12 Bytes Fixed Width with XOR CRC8)
+### 5.1 Native 6-Axis Motion Queue (`trapq` & `itersolve`)
+The system delegates all real-time microsecond step scheduling to Klipper's compiled C core. The Raspberry Pi host daemon interacts with Klipper via its non-blocking Unix pseudo-terminal (`/tmp/printer`):
 
-Step trajectories are discretized by the host into quadratic acceleration step chunks using the 12-byte `CompactStepChunk` format with integrated hardware framing checksum:
+- **6-Axis Coordinated Kinematics**: Implemented via `AF_A`, `AF_B`, `AF_C` rail allocation in `kin_cartesian.c` and `kinematics/cartesian.py`.
+- **Motion G-code Format**: Coordinated moves are streamed directly as standard G-code lines:
+  ```gcode
+  G1 X{j1:.3f} Y{j2:.3f} Z{j3:.3f} A{j4:.3f} B{j5:.3f} C{j6:.3f} F{feedrate:.1f}
+  ```
+- **Low-Latency Lookahead Tuning**: To support 50–100 Hz interactive follow mode without stuttering or long lookahead lag, Klipper's trapq buffer is tuned in `printer.cfg`:
+  ```ini
+  [printer]
+  kinematics: cartesian
+  buffer_time_low: 0.020
+  buffer_time_high: 0.050
+  buffer_time_start: 0.030
+  max_velocity: 300.0
+  max_accel: 1500.0
+  ```
+  This creates an agile 20–50 ms lookahead horizon, perfectly matching high-rate UDP streams while preventing queue starvation.
 
-```
- 0        1        2..5         6..7        8..9        10       11
-+--------+--------+------------+-----------+-----------+--------+--------+
-|  0x55  |axis_dir|start_clock |step_count | interval  |add_scld|  CRC8  |
-| (uint8)| (uint8)|(uint32_le) |(uint16_le)|(uint16_le)| (int8) | (uint8)|
-+--------+--------+------------+-----------+-----------+--------+--------+
-```
-
-| Byte Offset | Field | Type | Description |
-| :---: | :--- | :---: | :--- |
-| `0` | **Header** | `uint8` | Constant sync byte `0x55` (ASCII `'U'`) |
-| `1` | **axis_dir** | `uint8` | Bit-packed: `(dir << 3) | (axis & 0x07)`.<br>Bits 0..2: Joint index (0 = J1, ..., 5 = J6).<br>Bit 3: Direction (1 = Positive, 0 = Negative). |
-| `2..5` | **start_clock** | `uint32_le` | Absolute 16 MHz master clock tick when the first step fires |
-| `6..7` | **step_count** | `uint16_le` | Total number of step pulses in this quadratic chunk |
-| `8..9` | **interval** | `uint16_le` | Clock ticks between initial step pulses ($t_{\text{step}} = \text{interval} \times 62.5\text{ ns}$) |
-| `10` | **add_scaled** | `int8` | Scaled acceleration delta per step ($\Delta \text{interval} = \text{add\_scaled}$ ticks) |
-| `11` | **CRC8** | `uint8` | XOR CRC-8 checksum over bytes 0 through 10 |
-
-### 5.2 UART Buffer Flow Control & Burst-Fill Pacing
-- The ATmega2560 UART FIFO is strictly 64 bytes (`SERIAL_RX_BUFFER_SIZE = 64`).
-- **Burst Fill & High-Water Mark Pacing**: The host trajectory streamer dispatches up to 4 step chunks (48 bytes max) per 5 ms tick across active joints having `free_slots >= 2`. Because 48 bytes fits within the 64-byte hardware FIFO, UART overflow is prevented while keeping the MCU ring buffer saturated (4 to 8 chunks deep, maintaining 60–100 ms of lookahead horizon at all times).
-- **In-Flight Chunk Horizon Tracking**: The host models MCU queue execution windows $[T_{\text{start}}, T_{\text{end}}]$ in the 16 MHz master clock domain. Chunks that have completed execution are retired dynamically based on estimated MCU clock ticks (`now_mcu`), continuously updating `free_slots[j] = 16 - len(in_flight_chunks[j])` without stalling when UART traffic is quiet.
-- **38-Byte Status Telemetry Frame**: When queried with `'?'\n`, the firmware emits a packed 38-byte status frame:
-  `[!] [flags: 1B] [positions: 24B] [free_slots: 6B] [endstops: 1B] [clock: 4B] [\n]`
-  providing real-time feedback of hardware ring buffer occupancy per joint.
-- **Sliding-Window Resync**: If a byte is dropped on the wire or a checksum mismatch occurs, the firmware scans for the next valid packet header (`0x55`, `'E'`, `'R'`, `'P'`, `'?'`, `'H'`, `'G'`, `'M'`) and uses `memmove` to realign the buffer window immediately, preventing stream desynchronization.
-- **Delimited ASCII Control**: All ASCII maintenance commands (`'E'`, `'R'`, `'P'`, `'?'`, `'H'`, `'I'`, `'D'`, `'M'`, `'G'`) require trailing newlines (`\n`), eliminating false triggers from arbitrary binary payload bytes matching ASCII command characters.
-- **Timer 1 Compare Match Guard**: In the hardware step engine, before `OCR1A` is written, the ISR verifies whether `TCNT1` has advanced past the intended compare target; if fewer than 160 ticks remain or a wraparound occurred, `OCR1A` is latched to `cur_tcnt + 160`, completely eliminating the 4.096 ms timer stalling bug.
+### 5.2 Hardware Pin Mapping & Firmware Interface
+- **Host-to-MCU Baud**: 250,000 baud over USB serial (`/dev/serial/by-id/usb-1a86_USB_Serial-if00-port0`).
+- **MCU Firmware**: Compiled AVR assembly/C firmware (`klipper.elf.hex`) running natively on ATmega2560 (16 MHz) with RAMPS 1.4:
+  - Joint 1 (Base): `[stepper_x]` (Step: `PF0`, Dir: `PF1`, Enable: `PD7`, Endstop: `^PE5`)
+  - Joint 2 (Shoulder): `[stepper_y]` (Step: `PF6`, Dir: `PF7`, Enable: `PF2`, Endstop: `^PJ1`)
+  - Joint 3 (Elbow): `[stepper_z]` (Step: `PL3`, Dir: `PL1`, Enable: `PK0`, Endstop: `^PD2`)
+  - Joint 4 (Forearm): `[stepper_a]` (Step: `PA4`, Dir: `PA6`, Enable: `PA2`, Endstop: `^PE4`)
+  - Joint 5 (Pitch): `[stepper_b]` (Step: `PK1`, Dir: `PK2`, Enable: `PK3`, Endstop: `^PJ0`)
+  - Joint 6 (Roll): `[stepper_c]` (Step: `PC1`, Dir: `PC3`, Enable: `PC7`, Endstop: `^PD3`)
+  - Gripper Servo: `[servo gripper]` on `ar11` (`PB5`)
+- **Fast Telemetry Queries**: Real-time position tracking runs at 20 Hz via background `M114` queries over the PTY, parsing joint coordinates `X:.. Y:.. Z:.. A:.. B:.. C:..`.
+- **Hardware E-Stop (`M112`)**: Asynchronous hardware emergency stop dispatched immediately on E-Stop command, transitioning Klipper to shutdown state within $<1.0\text{ ms}$.
 
 ---
 
@@ -270,19 +272,19 @@ Step trajectories are discretized by the host into quadratic acceleration step c
 │  Action: Controlled Deceleration to HOLD Stop          │
 │  State: Preserves Homing Calibration & Position        │
 └───────────────────────────┬────────────────────────────┘
-                            │ Continuous Step Chunks / Pings (>= 10 Hz)
+                            │ Continuous Motion Stream / M114 (>= 20 Hz)
                             ▼
 ┌────────────────────────────────────────────────────────┐
-│              Tier 2 Watchdog (ATmega2560 MCU)          │
+│             Tier 2 Watchdog (Klipper MCU AVR)          │
 │  Timeout: 250 ms                                       │
-│  Trigger: Serial bus silence from Host Daemon          │
-│  Action: Immediate Coil De-energization (Hardware Off) │
-│  State: Clears homed_mask = 0 (Position Invalidated)   │
+│  Trigger: Host serial silence / AVR communication loss │
+│  Action: Instant Hardware Shutdown & Stepper Disable   │
+│  State: Klipper enters Shutdown State (M112 safety)    │
 └────────────────────────────────────────────────────────┘
 ```
 
-- **Tier 1 (Client-to-Host @ 150 ms)**: If the client stops transmitting for $>150\text{ ms}$, the host decelerates smoothly to an immediate **HOLD** stop. Joint coordinates remain valid.
-- **Tier 2 (Host-to-MCU @ 250 ms)**: If the host daemon halts or crashes, the MCU pulls all motor `ENABLE` pins HIGH within 250 ms, de-energizing stepper coils to prevent collisions. Because de-energized motors drop under gravity, `homed_mask` is cleared to `0x00`, strictly requiring re-homing upon recovery.
+- **Tier 1 (Client-to-Host @ 150 ms)**: If the client stops transmitting for $>150\text{ ms}$, the host decelerates smoothly to an immediate **HOLD** stop using the 1-Euro derivative ramp. Joint coordinates remain valid.
+- **Tier 2 (Host-to-MCU @ 250 ms)**: Klipper's native microsecond watchdog monitors serial command packets. If the host daemon halts or serial disconnects, the MCU immediately shuts off all stepper coils within 250 ms. Recovering requires issuing `FIRMWARE_RESTART`.
 
 ---
 
