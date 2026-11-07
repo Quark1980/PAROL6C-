@@ -52,8 +52,17 @@ namespace PAROLC_ControlSuite
             _gizmo = new RobotGizmoVisual3D();
             Viewport3D.Children.Add(_gizmo);
 
-            // Subscribe to pose and trail updates from ViewModel
+            // Subscribe to pose, end-effector, gripper, and trail updates from ViewModel
             _vm.VisualsUpdated += OnVisualsUpdated;
+            _vm.EndEffectorChanged += def => Dispatcher.Invoke(() =>
+            {
+                _visualizer.SetEndEffector(def);
+                _gizmo.SetPose(_vm.TargetX, _vm.TargetY, _vm.TargetZ);
+            });
+            _vm.GripperVisualsUpdated += (targetDeg, actualDeg) => Dispatcher.Invoke(() =>
+            {
+                _visualizer.UpdateGripperTransforms(targetDeg, actualDeg);
+            });
             _vm.TrailUpdated += (pts, isFollow) => Dispatcher.Invoke(() => _trailVisual.UpdateTrail(pts, isFollow));
             _vm.PropertyChanged += OnViewModelPropertyChanged;
 
@@ -168,6 +177,14 @@ namespace PAROLC_ControlSuite
             if (_visualizer != null)
             {
                 _visualizer.GhostVisible = (ChkShowGhost.IsChecked == true);
+            }
+        }
+
+        private void ChkShowCamFov_Changed(object sender, RoutedEventArgs e)
+        {
+            if (_visualizer != null && sender is CheckBox chk)
+            {
+                _visualizer.ShowCameraFovCone = (chk.IsChecked == true);
             }
         }
 

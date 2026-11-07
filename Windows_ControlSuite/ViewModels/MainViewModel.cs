@@ -220,10 +220,53 @@ namespace PAROLC_ControlSuite.ViewModels
         public double TrimJ5 { get => _trimJ5; set => SetProperty(ref _trimJ5, value); }
         public double TrimJ6 { get => _trimJ6; set => SetProperty(ref _trimJ6, value); }
 
-        // Gripper (Debounced 25 Hz max + Stationary Interlock)
+        // Gripper (Debounced 25 Hz max + Stationary Interlock) & End Effector Selection
         private double _gripperAngle = 90.0;
+        private double _actualGripperAngle = 90.0;
         private long _lastGripperSendTicks = 0;
         private double? _pendingGripperAngle = null;
+
+        public List<EndEffectorDefinition> AvailableEndEffectors { get; } = RobotMeshVisualizer.GetAvailableEndEffectors();
+
+        private EndEffectorDefinition _selectedEndEffector;
+        public EndEffectorDefinition SelectedEndEffector
+        {
+            get => _selectedEndEffector;
+            set
+            {
+                if (SetProperty(ref _selectedEndEffector, value) && value != null)
+                {
+                    ToolLengthMm = value.ToolLengthMm;
+                    EndEffectorChanged?.Invoke(value);
+                    AppendLog($"Selected End Effector: {value.DisplayName} (Tool Offset Z = -{value.ToolLengthMm:F1} mm)");
+                }
+            }
+        }
+
+        private double _toolLengthMm = 118.0;
+        public double ToolLengthMm
+        {
+            get => _toolLengthMm;
+            set
+            {
+                double clamped = Math.Clamp(value, 0.0, 300.0);
+                if (SetProperty(ref _toolLengthMm, clamped))
+                {
+                    _kinematics.ToolOffsetZ = -clamped;
+                    double[] actualFk = _kinematics.ComputeFkPose(GetActualJoints());
+                    ActualX = Math.Round(actualFk[0], 2);
+                    ActualY = Math.Round(actualFk[1], 2);
+                    ActualZ = Math.Round(actualFk[2], 2);
+                    ActualRoll = Math.Round(actualFk[3], 2);
+                    ActualPitch = Math.Round(actualFk[4], 2);
+                    ActualYaw = Math.Round(actualFk[5], 2);
+
+                    UpdateTargetFk();
+                    _lockedRotationMatrix = _kinematics.ComputeTcpMatrix(GetTargetJoints());
+                    VisualsUpdated?.Invoke(GetActualJoints(), GetTargetJoints());
+                }
+            }
+        }
 
         public double GripperAngle
         {
@@ -233,7 +276,8 @@ namespace PAROLC_ControlSuite.ViewModels
                 double clamped = Math.Clamp(value, 0.0, 180.0);
                 if (SetProperty(ref _gripperAngle, clamped))
                 {
-                    GripperMm = Math.Round(62.5 * (1.0 - (clamped / 180.0)), 1);
+                    GripperMm = Math.Round(62.5 * (clamped / 180.0), 1);
+                    GripperVisualsUpdated?.Invoke(_gripperAngle, _actualGripperAngle);
                     RequestGripperDispatch(clamped, forceImmediate: false);
                 }
             }
@@ -244,7 +288,8 @@ namespace PAROLC_ControlSuite.ViewModels
             double clamped = Math.Clamp(angleDeg, 0.0, 180.0);
             _gripperAngle = clamped;
             OnPropertyChanged(nameof(GripperAngle));
-            GripperMm = Math.Round(62.5 * (1.0 - (clamped / 180.0)), 1);
+            GripperMm = Math.Round(62.5 * (clamped / 180.0), 1);
+            GripperVisualsUpdated?.Invoke(_gripperAngle, _actualGripperAngle);
             RequestGripperDispatch(clamped, forceImmediate: true);
         }
 
@@ -530,6 +575,12 @@ namespace PAROLC_ControlSuite.ViewModels
         // Action invoked when visual 3D poses need update on UI thread
         public event Action<double[], double[]> VisualsUpdated;
 
+        // Action invoked when active End Effector selection changes
+        public event Action<EndEffectorDefinition> EndEffectorChanged;
+
+        // Action invoked when Gripper jaw angle changes: (targetGripperDeg, actualGripperDeg)
+        public event Action<double, double> GripperVisualsUpdated;
+
         // Action invoked when 3D viewport planned path or Follow Mode dynamic trail updates: (waypoints, isFollowTrail)
         public event Action<IReadOnlyList<System.Windows.Media.Media3D.Point3D>, bool> TrailUpdated;
 
@@ -558,6 +609,12 @@ namespace PAROLC_ControlSuite.ViewModels
         public MainViewModel()
         {
             _kinematics = new RobotKinematics();
+            _selectedEndEffector = AvailableEndEffectors.Count > 0 ? AvailableEndEffectors[0] : null;
+            if (_selectedEndEffector != null)
+            {
+                _toolLengthMm = _selectedEndEffector.ToolLengthMm;
+                _kinematics.ToolOffsetZ = -_toolLengthMm;
+            }
             _client = new RobotWebSocketClient();
 
             _client.StateChanged += OnConnectionStateChanged;
@@ -846,6 +903,11 @@ namespace PAROLC_ControlSuite.ViewModels
                 }
 
                 // Notify 3D Visualizer
+                if (data.GripperMm >= 0)
+                {
+                    _actualGripperAngle = Math.Clamp((1.0 - (data.GripperMm / 62.5)) * 180.0, 0.0, 180.0);
+                    GripperVisualsUpdated?.Invoke(_gripperAngle, _actualGripperAngle);
+                }
                 VisualsUpdated?.Invoke(GetActualJoints(), GetTargetJoints());
             });
         }

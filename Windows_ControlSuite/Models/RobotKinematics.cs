@@ -42,10 +42,10 @@ namespace PAROLC_ControlSuite.Models
             (new[] { 0.0, 37.0, 0.0 }, new[] { Math.PI / 2.0, 0.0, 0.0 })
         };
 
-        // Tool offset in mm relative to L6 flange (default gripper tip ~105 mm)
+        // Tool offset in mm relative to L6 flange (default End_effector_TD-8820MG.stl tip = 118.0 mm)
         public double ToolOffsetX { get; set; } = 0.0;
         public double ToolOffsetY { get; set; } = 0.0;
-        public double ToolOffsetZ { get; set; } = -105.0;
+        public double ToolOffsetZ { get; set; } = -118.0;
 
         /// <summary>
         /// 4x4 Transformation Matrix

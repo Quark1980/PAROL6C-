@@ -111,7 +111,7 @@ class Parol6Kinematics:
 
     def __init__(
         self,
-        tool_offset_xyz_m: Tuple[float, float, float] = (0.0, 0.0, -0.105),
+        tool_offset_xyz_m: Tuple[float, float, float] = (0.0, 0.0, -0.118),
         base_offset_xyz_m: Tuple[float, float, float] = (0.0, 0.0, 0.0),
         soft_limits_deg: Optional[List[List[float]]] = None,
     ):
@@ -146,7 +146,7 @@ class Parol6Kinematics:
             T[:3, 3] = xyz
             self._T_static.append(T)
 
-    def set_tool_offset(self, x_mm: float = 0.0, y_mm: float = 0.0, z_mm: float = -105.0):
+    def set_tool_offset(self, x_mm: float = 0.0, y_mm: float = 0.0, z_mm: float = -118.0):
         """Configure TCP offset in millimeters relative to L6 flange."""
         self.tool_offset_xyz = np.array([x_mm / 1000.0, y_mm / 1000.0, z_mm / 1000.0], dtype=np.float64)
 

@@ -294,7 +294,7 @@
                     </Border>
 
                     <!-- Floating Quick IK Tool Attitude Overlay -->
-                    <Border Background="#CC141418" BorderBrush="{StaticResource BorderDark}" BorderThickness="1" CornerRadius="6" Padding="12,8">
+                    <Border Background="#CC141418" BorderBrush="{StaticResource BorderDark}" BorderThickness="1" CornerRadius="6" Padding="12,8" Margin="0,0,0,8">
                         <StackPanel>
                             <TextBlock Text="IK &amp; TOOL ORIENTATION MODE" FontWeight="Bold" FontSize="11" Foreground="{StaticResource AccentOrange}" Margin="0,0,0,4"/>
                             <RadioButton GroupName="OverlayIkMode" Content="🎯 Probe Tip (Free Tool Angle)" IsChecked="{Binding IsIkPositionOnly, Mode=TwoWay}" Foreground="{StaticResource TextLight}" Margin="0,2"/>
@@ -304,6 +304,23 @@
                                 <Button Content="➡️ HORIZONTAL" Click="BtnToolHorizontal_Click" Padding="6,3" FontSize="10" Margin="0,0,4,0" Background="#1565C0" ToolTip="Position tool horizontally forward (+X) and lock orientation"/>
                                 <Button Content="🔒 LOCK NOW" Click="BtnLockCurrentAngle_Click" Padding="6,3" FontSize="10" Background="#37474F" ToolTip="Lock the tool at its current Roll/Pitch/Yaw attitude"/>
                             </StackPanel>
+                        </StackPanel>
+                    </Border>
+
+                    <!-- Floating End-Effector & Animated Gripper Selector Overlay -->
+                    <Border Background="#CC141418" BorderBrush="{StaticResource BorderDark}" BorderThickness="1" CornerRadius="6" Padding="12,8" Width="310">
+                        <StackPanel>
+                            <Grid Margin="0,0,0,4">
+                                <TextBlock Text="END EFFECTOR &amp; ANIMATED GRIPPER" FontWeight="Bold" FontSize="11" Foreground="{StaticResource AccentCyan}"/>
+                                <TextBlock Text="{Binding ToolLengthMm, StringFormat='TCP: {0:F0} mm'}" HorizontalAlignment="Right" FontFamily="Consolas" FontSize="11" FontWeight="Bold" Foreground="{StaticResource AccentGreen}"/>
+                            </Grid>
+                            <ComboBox ItemsSource="{Binding AvailableEndEffectors}" SelectedItem="{Binding SelectedEndEffector, Mode=TwoWay}" Background="#1E2028" Foreground="#111111" FontSize="11" Padding="6,4" Margin="0,0,0,6"/>
+                            <Grid Margin="0,0,0,2">
+                                <TextBlock Text="Animated Jaw Pose:" FontSize="10" Foreground="{StaticResource TextMuted}"/>
+                                <TextBlock Text="{Binding GripperAngle, StringFormat='{}{0:F0}°'}" HorizontalAlignment="Right" FontFamily="Consolas" FontSize="10" FontWeight="Bold" Foreground="{StaticResource AccentCyan}"/>
+                            </Grid>
+                            <Slider Minimum="0" Maximum="180" Value="{Binding GripperAngle, Mode=TwoWay}" Thumb.DragCompleted="GripperSlider_DragCompleted" Margin="0,0,0,4"/>
+                            <CheckBox x:Name="ChkShowCamFov" Content="Show 30° Downward Top Camera Sight Cone" IsChecked="True" Checked="ChkShowCamFov_Changed" Unchecked="ChkShowCamFov_Changed" Foreground="{StaticResource TextLight}" FontSize="10"/>
                         </StackPanel>
                     </Border>
                 </StackPanel>
@@ -738,16 +755,35 @@
                             </ScrollViewer>
                         </TabItem>
 
-                        <!-- TAB 4: GRIPPER -->
+                        <!-- TAB 4: GRIPPER & END EFFECTOR -->
                         <TabItem Header="Gripper">
                             <StackPanel Margin="8">
+                                <TextBlock Text="END EFFECTOR MODEL &amp; TOOL OFFSET" FontWeight="Bold" Foreground="{StaticResource AccentCyan}" Margin="0,0,0,8"/>
+
+                                <Border Background="{StaticResource CardBg}" CornerRadius="4" Padding="12" Margin="0,0,0,12">
+                                    <StackPanel>
+                                        <TextBlock Text="Active End Effector (from Assets/meshes):" FontSize="11" Foreground="{StaticResource TextMuted}" Margin="0,0,0,4"/>
+                                        <ComboBox ItemsSource="{Binding AvailableEndEffectors}" SelectedItem="{Binding SelectedEndEffector, Mode=TwoWay}" FontSize="11" Padding="6,5" Margin="0,0,0,10"/>
+
+                                        <Grid Margin="0,0,0,4">
+                                            <TextBlock Text="Tool Length Offset (-Z from L6 Flange):" Foreground="{StaticResource TextMuted}" VerticalAlignment="Center"/>
+                                            <TextBlock Text="{Binding ToolLengthMm, StringFormat='{}{0:F1} mm'}" HorizontalAlignment="Right" FontFamily="Consolas" FontWeight="Bold" Foreground="{StaticResource AccentGreen}"/>
+                                        </Grid>
+                                        <Slider Minimum="0" Maximum="220" Value="{Binding ToolLengthMm, Mode=TwoWay}" SmallChange="1" LargeChange="5" Margin="0,0,0,6"/>
+                                        <TextBlock Text="Default: 118.0 mm for End_effector_TD-8820MG.stl (with animated sliding fingers &amp; 30° downward top camera)." FontSize="10" Foreground="{StaticResource TextMuted}" TextWrapping="Wrap"/>
+                                    </StackPanel>
+                                </Border>
+
                                 <TextBlock Text="RC SERVO GRIPPER ACTUATION" FontWeight="Bold" Foreground="{StaticResource AccentCyan}" Margin="0,0,0,8"/>
 
                                 <Border Background="{StaticResource CardBg}" CornerRadius="4" Padding="12" Margin="0,0,0,12">
                                     <StackPanel>
                                         <Grid Margin="0,0,0,8">
-                                            <TextBlock Text="Jaw Gap:" Foreground="{StaticResource TextMuted}"/>
-                                            <TextBlock Text="{Binding GripperMm, StringFormat='{}{0:F1} mm'}" HorizontalAlignment="Right" FontFamily="Consolas" FontWeight="Bold" Foreground="{StaticResource AccentCyan}"/>
+                                            <TextBlock Text="Jaw Opening / Servo Angle:" Foreground="{StaticResource TextMuted}"/>
+                                            <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                                                <TextBlock Text="{Binding GripperAngle, StringFormat='{}{0:F0}°  |  '}" FontFamily="Consolas" FontWeight="Bold" Foreground="{StaticResource AccentOrange}"/>
+                                                <TextBlock Text="{Binding GripperMm, StringFormat='{}{0:F1} mm'}" FontFamily="Consolas" FontWeight="Bold" Foreground="{StaticResource AccentCyan}"/>
+                                            </StackPanel>
                                         </Grid>
                                         <Slider Minimum="0" Maximum="180" Value="{Binding GripperAngle, Mode=TwoWay}" Thumb.DragCompleted="GripperSlider_DragCompleted" Margin="0,0,0,12"/>
                                         <UniformGrid Columns="3">
